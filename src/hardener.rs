@@ -271,4 +271,90 @@ mod tests {
         h.on_threat(&threat);
         assert!(!h.is_active());
     }
+
+    #[test]
+    fn test_on_threat_auto_harden_skips_medium_severity() {
+        use crate::alert::{Severity, Threat, ThreatKind};
+
+        let mut h = make_hardener();
+        let threat = Threat::new(
+            ThreatKind::ArpFlood {
+                new_entries: 5,
+                window_secs: 5,
+            },
+            Severity::Medium,
+            "test",
+        );
+        h.on_threat(&threat);
+        assert!(!h.is_active());
+    }
+
+    #[test]
+    fn test_on_threat_no_auto_harden_when_disabled() {
+        use crate::alert::{Severity, Threat, ThreatKind};
+
+        let mut h = Hardener::new(HardenerConfig {
+            enabled: true,
+            auto_harden: false,
+            allowed_outbound_ports: vec![80, 443],
+        });
+        let threat = Threat::new(
+            ThreatKind::ArpSpoof {
+                ip: std::net::Ipv4Addr::new(192, 168, 1, 1),
+                old_mac: crate::net_util::MacAddr([0xaa; 6]),
+                new_mac: crate::net_util::MacAddr([0xbb; 6]),
+            },
+            Severity::Critical,
+            "test",
+        );
+        h.on_threat(&threat);
+        assert!(!h.is_active()); // auto_harden disabled
+    }
+
+    #[test]
+    fn test_generate_ruleset_with_empty_ports() {
+        let h = Hardener::new(HardenerConfig {
+            enabled: true,
+            auto_harden: false,
+            allowed_outbound_ports: vec![],
+        });
+        let ruleset = h.generate_ruleset();
+        assert!(ruleset.contains("table inet bulwark"));
+        // Empty port list results in empty braces (nft handles this)
+        assert!(ruleset.contains("tcp dport {  } accept"));
+    }
+
+    #[test]
+    fn test_generate_ruleset_with_single_port() {
+        let h = Hardener::new(HardenerConfig {
+            enabled: true,
+            auto_harden: false,
+            allowed_outbound_ports: vec![443],
+        });
+        let ruleset = h.generate_ruleset();
+        assert!(ruleset.contains("443"));
+    }
+
+    #[test]
+    fn test_generate_ruleset_has_icmpv6() {
+        let h = make_hardener();
+        let ruleset = h.generate_ruleset();
+        assert!(ruleset.contains("icmpv6"));
+        assert!(ruleset.contains("nd-neighbor-solicit"));
+    }
+
+    #[test]
+    fn test_generate_ruleset_has_logging() {
+        let h = make_hardener();
+        let ruleset = h.generate_ruleset();
+        assert!(ruleset.contains("log prefix \"bulwark_drop_in: \" drop"));
+        assert!(ruleset.contains("log prefix \"bulwark_drop_out: \" drop"));
+    }
+
+    #[test]
+    fn test_deactivate_when_not_active_is_ok() {
+        let mut h = make_hardener();
+        assert!(h.deactivate().is_ok());
+        assert!(!h.is_active());
+    }
 }
