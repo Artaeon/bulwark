@@ -2,8 +2,15 @@
 name = "bulwark"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.70"
 description = "Network security daemon for open/untrusted wireless networks"
 license = "MIT"
+repository = "https://github.com/Artaeon/bulwark"
+homepage = "https://github.com/Artaeon/bulwark"
+keywords = ["security", "network", "wireless", "arp-spoof", "firewall"]
+categories = ["network-programming", "command-line-utilities"]
+authors = ["Raphael Lugmayr <raphael.lugmayr@stoicera.com>"]
+readme = "README.md"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -18,3 +25,10 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Optimize release builds for a small, fast security daemon
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
