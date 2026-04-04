@@ -168,7 +168,9 @@ impl DnsDetector {
             .map_err(crate::Error::Io)?;
 
         let id = self.next_id();
-        let query = net_util::build_dns_query(id, domain);
+        let query = net_util::build_dns_query(id, domain).ok_or_else(|| {
+            crate::Error::Network(format!("invalid domain for DNS query: {}", domain))
+        })?;
 
         socket
             .send_to(&query, resolver_addr)
@@ -265,7 +267,7 @@ search local
     #[test]
     fn test_dns_query_response_roundtrip() {
         let id = 0x4242;
-        let query = net_util::build_dns_query(id, "example.com");
+        let query = net_util::build_dns_query(id, "example.com").unwrap();
         // Verify query structure
         assert_eq!(query[0], 0x42);
         assert_eq!(query[1], 0x42);
@@ -298,5 +300,59 @@ search local
         .collect();
         let overlap = system.intersection(&trusted).count();
         assert!(overlap > 0);
+    }
+
+    #[test]
+    fn test_multiple_system_ips_partial_overlap_ok() {
+        // System returns {A, B}, trusted returns {B, C} — overlap on B
+        let system: HashSet<Ipv4Addr> = [
+            Ipv4Addr::new(1, 1, 1, 1),
+            Ipv4Addr::new(2, 2, 2, 2),
+        ]
+        .into_iter()
+        .collect();
+        let trusted: HashSet<Ipv4Addr> = [
+            Ipv4Addr::new(2, 2, 2, 2),
+            Ipv4Addr::new(3, 3, 3, 3),
+        ]
+        .into_iter()
+        .collect();
+        let overlap = system.intersection(&trusted).count();
+        assert!(overlap > 0);
+    }
+
+    #[test]
+    fn test_parse_resolv_conf_with_comments_and_whitespace() {
+        let content = "\
+# This is a comment
+   nameserver   192.168.1.1
+nameserver 8.8.8.8
+  # another comment
+search localdomain
+domain example.com
+";
+        let resolvers = parse_resolv_conf(content);
+        assert_eq!(resolvers, vec!["192.168.1.1", "8.8.8.8"]);
+    }
+
+    #[test]
+    fn test_parse_resolv_conf_ipv6() {
+        let content = "nameserver ::1\nnameserver 2001:4860:4860::8888\n";
+        let resolvers = parse_resolv_conf(content);
+        assert_eq!(resolvers, vec!["::1", "2001:4860:4860::8888"]);
+    }
+
+    #[test]
+    fn test_dns_detector_initial_state() {
+        let det = DnsDetector::new(DnsConfig::default());
+        assert_eq!(det.query_id, 1);
+    }
+
+    #[test]
+    fn test_build_dns_query_rejects_malformed() {
+        // Leading dot
+        assert!(net_util::build_dns_query(1, ".example.com").is_none());
+        // Trailing dot creates empty label
+        assert!(net_util::build_dns_query(1, "example.com.").is_none());
     }
 }
