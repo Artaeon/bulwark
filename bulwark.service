@@ -1,0 +1,33 @@
+[Unit]
+Description=bulwark — network security daemon for open wireless networks
+Documentation=https://github.com/bulwark-net/bulwark
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bulwark --foreground --config /etc/bulwark/bulwark.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# Security hardening for the service itself
+NoNewPrivileges=no
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/
+ReadWritePaths=/proc /sys
+PrivateTmp=yes
+
+# Needs root for raw sockets and nftables
+# If only monitoring (no hardener), you could use:
+#   AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+#   User=bulwark
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bulwark
+
+[Install]
+WantedBy=multi-user.target
