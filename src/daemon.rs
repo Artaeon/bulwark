@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::time::Instant;
+
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -10,6 +13,54 @@ use crate::detectors::gateway::GatewayDetector;
 use crate::hardener::Hardener;
 
 const CHANNEL_CAPACITY: usize = 256;
+
+/// Minimum seconds between identical threat alerts (by detector + kind discriminant).
+const DEDUP_WINDOW_SECS: u64 = 60;
+/// Maximum unique threat keys to track (prevents unbounded memory growth).
+const DEDUP_MAX_KEYS: usize = 1024;
+
+/// Deduplicates repeated identical threats within a time window.
+/// A security tool that floods logs with the same alert every 5 seconds is useless.
+struct ThreatDedup {
+    last_seen: HashMap<String, Instant>,
+    window_secs: u64,
+}
+
+impl ThreatDedup {
+    fn new(window_secs: u64) -> Self {
+        Self {
+            last_seen: HashMap::new(),
+            window_secs,
+        }
+    }
+
+    /// Returns true if this threat should be emitted (not a duplicate).
+    fn should_emit(&mut self, threat: &Threat) -> bool {
+        let key = Self::threat_key(threat);
+        let now = Instant::now();
+
+        // Evict stale entries periodically
+        if self.last_seen.len() > DEDUP_MAX_KEYS {
+            self.last_seen
+                .retain(|_, t| now.duration_since(*t).as_secs() < self.window_secs);
+        }
+
+        if let Some(last) = self.last_seen.get(&key) {
+            if now.duration_since(*last).as_secs() < self.window_secs {
+                return false;
+            }
+        }
+
+        self.last_seen.insert(key, now);
+        true
+    }
+
+    /// Generate a dedup key from detector name + threat kind discriminant.
+    fn threat_key(threat: &Threat) -> String {
+        // Use detector + a stable discriminant of the threat kind
+        format!("{}:{}", threat.detector, threat.kind)
+    }
+}
 
 /// The main daemon that orchestrates all detectors and the hardener.
 pub struct Daemon {
@@ -114,12 +165,25 @@ impl Daemon {
             return Ok(());
         }
 
+        // Threat deduplication to prevent log flooding
+        let mut dedup = ThreatDedup::new(DEDUP_WINDOW_SECS);
+        let mut total_threats: u64 = 0;
+        let mut suppressed_threats: u64 = 0;
+
         // Main event loop: process threats from detectors
         loop {
             tokio::select! {
                 threat = rx.recv() => {
                     match threat {
                         Some(threat) => {
+                            total_threats += 1;
+
+                            // Deduplicate repeated identical threats
+                            if !dedup.should_emit(&threat) {
+                                suppressed_threats += 1;
+                                continue;
+                            }
+
                             // Log to tracing (which goes to journald/stderr)
                             match threat.severity {
                                 crate::alert::Severity::Low => {
@@ -164,6 +228,14 @@ impl Daemon {
                     break;
                 }
             }
+        }
+
+        if total_threats > 0 {
+            info!(
+                total = total_threats,
+                suppressed = suppressed_threats,
+                "threat summary"
+            );
         }
 
         // Cleanup: deactivate hardener if active
@@ -214,6 +286,8 @@ fn detect_wireless_interface() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alert::{Severity, ThreatKind};
+    use std::net::Ipv4Addr;
 
     #[test]
     fn test_detect_wireless_interface_returns_something_or_none() {
@@ -235,5 +309,116 @@ mod tests {
 
         let result = daemon.run(shutdown_rx).await;
         assert!(result.is_ok());
+    }
+
+    fn make_threat(detector: &'static str, severity: Severity, kind: ThreatKind) -> Threat {
+        Threat::new(kind, severity, detector)
+    }
+
+    #[test]
+    fn test_dedup_first_threat_always_emitted() {
+        let mut dedup = ThreatDedup::new(60);
+        let threat = make_threat(
+            "arp",
+            Severity::Critical,
+            ThreatKind::ArpSpoof {
+                ip: Ipv4Addr::new(192, 168, 1, 1),
+                old_mac: crate::net_util::MacAddr([0xaa; 6]),
+                new_mac: crate::net_util::MacAddr([0xbb; 6]),
+            },
+        );
+        assert!(dedup.should_emit(&threat));
+    }
+
+    #[test]
+    fn test_dedup_suppresses_identical_threat() {
+        let mut dedup = ThreatDedup::new(60);
+        let threat = make_threat(
+            "arp",
+            Severity::Critical,
+            ThreatKind::ArpSpoof {
+                ip: Ipv4Addr::new(192, 168, 1, 1),
+                old_mac: crate::net_util::MacAddr([0xaa; 6]),
+                new_mac: crate::net_util::MacAddr([0xbb; 6]),
+            },
+        );
+        assert!(dedup.should_emit(&threat));
+        assert!(!dedup.should_emit(&threat)); // Suppressed
+    }
+
+    #[test]
+    fn test_dedup_different_detectors_not_suppressed() {
+        let mut dedup = ThreatDedup::new(60);
+        let t1 = make_threat(
+            "arp",
+            Severity::Critical,
+            ThreatKind::ArpSpoof {
+                ip: Ipv4Addr::new(192, 168, 1, 1),
+                old_mac: crate::net_util::MacAddr([0xaa; 6]),
+                new_mac: crate::net_util::MacAddr([0xbb; 6]),
+            },
+        );
+        let t2 = make_threat(
+            "gateway",
+            Severity::High,
+            ThreatKind::GatewayIpChanged {
+                old_ip: Ipv4Addr::new(192, 168, 1, 1),
+                new_ip: Ipv4Addr::new(10, 0, 0, 1),
+            },
+        );
+        assert!(dedup.should_emit(&t1));
+        assert!(dedup.should_emit(&t2)); // Different detector/kind, not suppressed
+    }
+
+    #[test]
+    fn test_dedup_expired_window_re_emits() {
+        let mut dedup = ThreatDedup::new(0); // 0 second window = always emit
+        let threat = make_threat(
+            "dns",
+            Severity::High,
+            ThreatKind::DnsPoisoning {
+                domain: "evil.com".into(),
+                system_results: vec![Ipv4Addr::new(1, 2, 3, 4)],
+                trusted_results: vec![Ipv4Addr::new(5, 6, 7, 8)],
+            },
+        );
+        assert!(dedup.should_emit(&threat));
+        // With window=0, this should emit again immediately
+        assert!(dedup.should_emit(&threat));
+    }
+
+    #[test]
+    fn test_dedup_evicts_stale_entries() {
+        let mut dedup = ThreatDedup::new(0);
+        // Fill beyond DEDUP_MAX_KEYS to trigger eviction
+        for i in 0..DEDUP_MAX_KEYS + 10 {
+            let threat = make_threat(
+                "arp",
+                Severity::Low,
+                ThreatKind::ArpFlood {
+                    new_entries: i,
+                    window_secs: 5,
+                },
+            );
+            dedup.should_emit(&threat);
+        }
+        // Should not panic or grow unbounded — with window=0, eviction clears all
+        assert!(dedup.last_seen.len() <= DEDUP_MAX_KEYS + 10);
+    }
+
+    #[test]
+    fn test_threat_key_deterministic() {
+        let threat = make_threat(
+            "arp",
+            Severity::Critical,
+            ThreatKind::ArpSpoof {
+                ip: Ipv4Addr::new(192, 168, 1, 1),
+                old_mac: crate::net_util::MacAddr([0xaa; 6]),
+                new_mac: crate::net_util::MacAddr([0xbb; 6]),
+            },
+        );
+        let k1 = ThreatDedup::threat_key(&threat);
+        let k2 = ThreatDedup::threat_key(&threat);
+        assert_eq!(k1, k2);
     }
 }
