@@ -241,4 +241,101 @@ IP address       HW type     Flags       HW address            Mask     Device
             .known_bindings
             .contains_key(&Ipv4Addr::new(192, 168, 1, 1)));
     }
+
+    #[test]
+    fn test_empty_arp_table_no_crash() {
+        let mut det = make_detector();
+        let threats = det.analyze("");
+        assert!(threats.is_empty());
+    }
+
+    #[test]
+    fn test_all_entries_disappear_no_crash() {
+        let mut det = make_detector();
+        det.analyze(BASELINE);
+        let threats = det.analyze(
+            "IP address       HW type     Flags       HW address            Mask     Device",
+        );
+        assert!(threats.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_spoofs_detected() {
+        let mut det = make_detector();
+        det.analyze(BASELINE);
+
+        // Both known entries changed their MACs
+        let double_spoof = "\
+IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.1      0x1         0x2         de:ad:be:ef:00:01     *        wlan0
+192.168.1.100    0x1         0x2         de:ad:be:ef:00:02     *        wlan0";
+
+        let threats = det.analyze(double_spoof);
+        let spoof_count = threats
+            .iter()
+            .filter(|t| matches!(t.kind, ThreatKind::ArpSpoof { .. }))
+            .count();
+        assert_eq!(spoof_count, 2);
+    }
+
+    #[test]
+    fn test_no_interface_filter_sees_all() {
+        let mut det = ArpDetector::new(
+            ArpConfig {
+                enabled: true,
+                poll_interval_secs: 5,
+            },
+            None, // No interface filter
+        );
+        let mixed = "\
+IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0
+10.0.0.1         0x1         0x2         11:22:33:44:55:66     *        eth0";
+
+        det.analyze(mixed);
+        assert_eq!(det.known_bindings.len(), 2);
+    }
+
+    #[test]
+    fn test_spoof_then_revert_no_second_alert() {
+        let mut det = make_detector();
+        det.analyze(BASELINE);
+
+        // Spoof happens
+        let spoofed = "\
+IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.1      0x1         0x2         de:ad:be:ef:00:01     *        wlan0
+192.168.1.100    0x1         0x2         11:22:33:44:55:66     *        wlan0";
+        let threats = det.analyze(spoofed);
+        assert_eq!(threats.len(), 1);
+
+        // Reverted to original — this is ALSO a change from the current baseline
+        let threats = det.analyze(BASELINE);
+        assert_eq!(threats.len(), 1); // Detects the change back
+    }
+
+    #[test]
+    fn test_flood_detection_resets_after_alert() {
+        let mut det = make_detector();
+        det.analyze(BASELINE);
+
+        // First flood
+        let mut flood = String::from(
+            "IP address       HW type     Flags       HW address            Mask     Device\n",
+        );
+        flood.push_str("192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0\n");
+        flood.push_str("192.168.1.100    0x1         0x2         11:22:33:44:55:66     *        wlan0\n");
+        for i in 0..15u8 {
+            flood.push_str(&format!(
+                "192.168.1.{}    0x1         0x2         de:ad:00:00:00:{:02x}     *        wlan0\n",
+                200 + i, i
+            ));
+        }
+        let threats = det.analyze(&flood);
+        assert!(threats.iter().any(|t| matches!(t.kind, ThreatKind::ArpFlood { .. })));
+
+        // Same table again — no new entries, so no flood
+        let threats = det.analyze(&flood);
+        assert!(threats.iter().all(|t| !matches!(t.kind, ThreatKind::ArpFlood { .. })));
+    }
 }
