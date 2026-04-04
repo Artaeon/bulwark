@@ -1,0 +1,49 @@
+# bulwark — network security daemon configuration
+#
+# All settings have sensible defaults. Only override what you need.
+
+# Wireless interface to monitor. Leave empty for auto-detection.
+interface = ""
+
+# Log level: trace, debug, info, warn, error
+log_level = "info"
+
+# ARP spoof detection
+# Monitors the ARP table for MAC address changes on known IPs.
+# A MAC change for the same IP strongly indicates ARP spoofing (MitM attack).
+[arp]
+enabled = true
+poll_interval_secs = 5
+
+# Gateway change detection
+# Tracks the default gateway IP and MAC address.
+# Gateway MAC changes with the same IP = critical (likely ARP poisoning).
+# Gateway IP changes = suspicious (possible evil twin or rogue AP).
+[gateway]
+enabled = true
+poll_interval_secs = 10
+
+# DNS poisoning detection
+# Compares DNS responses from the system resolver against trusted resolvers.
+# Zero overlap in results = likely DNS poisoning.
+[dns]
+enabled = true
+poll_interval_secs = 30
+trusted_resolvers = ["1.1.1.1", "8.8.8.8"]
+test_domains = ["example.com", "cloudflare.com", "google.com"]
+
+# Rogue DHCP server detection
+# Monitors for multiple DHCP servers on the network.
+# Multiple servers = likely rogue AP or MitM setup.
+[dhcp]
+enabled = true
+listen_timeout_secs = 10
+
+# Firewall hardening (nftables)
+# When enabled, can automatically harden the firewall on threat detection.
+# Creates an nftables table that drops all inbound except established connections
+# and restricts outbound to essential ports only.
+[hardener]
+enabled = false
+auto_harden = false
+allowed_outbound_ports = [53, 80, 443, 853, 993, 587]
