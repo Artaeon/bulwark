@@ -151,13 +151,24 @@ pub fn arp_entries_to_map(
 ) -> HashMap<Ipv4Addr, MacAddr> {
     entries
         .iter()
-        .filter(|e| interface.is_none() || e.device == interface.unwrap())
+        .filter(|e| match interface {
+            Some(iface) => e.device == iface,
+            None => true,
+        })
         .map(|e| (e.ip, e.mac))
         .collect()
 }
 
 /// Construct a minimal DNS query packet for an A record lookup.
-pub fn build_dns_query(id: u16, domain: &str) -> Vec<u8> {
+///
+/// Returns None if the domain is malformed (empty labels, labels > 63 bytes,
+/// total domain > 253 bytes).
+pub fn build_dns_query(id: u16, domain: &str) -> Option<Vec<u8>> {
+    // RFC 1035: total domain name max 253 chars, each label max 63 chars
+    if domain.is_empty() || domain.len() > 253 {
+        return None;
+    }
+
     let mut packet = Vec::with_capacity(64);
 
     // Header
@@ -170,18 +181,31 @@ pub fn build_dns_query(id: u16, domain: &str) -> Vec<u8> {
 
     // Question section
     for label in domain.split('.') {
-        let len = label.len() as u8;
-        packet.push(len);
+        if label.is_empty() || label.len() > 63 {
+            return None;
+        }
+        // Label length already validated to be <= 63, so this cast is safe.
+        #[allow(clippy::cast_possible_truncation)]
+        packet.push(label.len() as u8);
         packet.extend_from_slice(label.as_bytes());
     }
     packet.push(0x00); // Root label
     packet.extend_from_slice(&[0x00, 0x01]); // QTYPE = A
     packet.extend_from_slice(&[0x00, 0x01]); // QCLASS = IN
 
-    packet
+    Some(packet)
 }
 
+/// Maximum sane counts for DNS sections to prevent DoS from crafted packets.
+const DNS_MAX_SECTION_COUNT: usize = 64;
+/// Maximum label traversals to prevent infinite loops from malformed names.
+const DNS_MAX_NAME_LABELS: usize = 128;
+
 /// Parse A record IPs from a DNS response packet.
+///
+/// Hardened against malformed packets: validates bounds at every step,
+/// limits section counts to prevent DoS, and limits name label traversals
+/// to prevent infinite loops from circular compression pointers.
 pub fn parse_dns_response(packet: &[u8]) -> Option<Vec<Ipv4Addr>> {
     if packet.len() < 12 {
         return None;
@@ -200,6 +224,11 @@ pub fn parse_dns_response(packet: &[u8]) -> Option<Vec<Ipv4Addr>> {
     let qdcount = u16::from_be_bytes([packet[4], packet[5]]) as usize;
     let ancount = u16::from_be_bytes([packet[6], packet[7]]) as usize;
 
+    // Reject absurd counts to prevent DoS
+    if qdcount > DNS_MAX_SECTION_COUNT || ancount > DNS_MAX_SECTION_COUNT {
+        return None;
+    }
+
     if ancount == 0 {
         return Some(Vec::new());
     }
@@ -208,6 +237,10 @@ pub fn parse_dns_response(packet: &[u8]) -> Option<Vec<Ipv4Addr>> {
     let mut offset = 12;
     for _ in 0..qdcount {
         offset = skip_dns_name(packet, offset)?;
+        // Bounds check before reading QTYPE + QCLASS
+        if offset.checked_add(4)? > packet.len() {
+            return None;
+        }
         offset += 4; // QTYPE + QCLASS
     }
 
@@ -218,7 +251,7 @@ pub fn parse_dns_response(packet: &[u8]) -> Option<Vec<Ipv4Addr>> {
             break;
         }
         offset = skip_dns_name(packet, offset)?;
-        if offset + 10 > packet.len() {
+        if offset.checked_add(10)? > packet.len() {
             break;
         }
         let rtype = u16::from_be_bytes([packet[offset], packet[offset + 1]]);
@@ -234,27 +267,44 @@ pub fn parse_dns_response(packet: &[u8]) -> Option<Vec<Ipv4Addr>> {
             );
             ips.push(ip);
         }
-        offset += rdlength;
+        // Prevent offset overflow
+        offset = offset.checked_add(rdlength)?;
     }
 
     Some(ips)
 }
 
 /// Skip a DNS name (handles both labels and compressed pointers).
+///
+/// Limits label traversals to prevent infinite loops from malformed packets
+/// with circular compression pointers.
 fn skip_dns_name(packet: &[u8], mut offset: usize) -> Option<usize> {
+    let mut labels_seen = 0;
     loop {
         if offset >= packet.len() {
             return None;
         }
+        if labels_seen >= DNS_MAX_NAME_LABELS {
+            return None; // Prevent infinite loops
+        }
+        labels_seen += 1;
         let len = packet[offset];
         if len == 0 {
             return Some(offset + 1);
         }
         // Compression pointer (top 2 bits set)
         if len & 0xC0 == 0xC0 {
+            // Need at least 2 bytes for the pointer
+            if offset + 1 >= packet.len() {
+                return None;
+            }
             return Some(offset + 2);
         }
-        offset += 1 + len as usize;
+        // Label length must not have the top bit set (reserved)
+        if len & 0x80 != 0 {
+            return None;
+        }
+        offset = offset.checked_add(1 + len as usize)?;
     }
 }
 
@@ -331,7 +381,7 @@ wlan0\t0001A8C0\t00000000\t0001\t0\t0\t600\tFFFFFF00\t0\t0\t0";
 
     #[test]
     fn test_build_dns_query() {
-        let query = build_dns_query(0x1234, "example.com");
+        let query = build_dns_query(0x1234, "example.com").unwrap();
         // Header
         assert_eq!(query[0..2], [0x12, 0x34]); // ID
         assert_eq!(query[4..6], [0x00, 0x01]); // QDCOUNT
@@ -398,5 +448,371 @@ wlan0\t0001A8C0\t00000000\t0001\t0\t0\t600\tFFFFFF00\t0\t0\t0";
         let wlan_only = arp_entries_to_map(&entries, Some("wlan0"));
         assert_eq!(wlan_only.len(), 1);
         assert!(wlan_only.contains_key(&Ipv4Addr::new(192, 168, 1, 1)));
+    }
+
+    // === Adversarial and edge case tests ===
+
+    #[test]
+    fn test_parse_arp_table_empty() {
+        let entries = parse_arp_table("");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_arp_table_header_only() {
+        let content = "IP address       HW type     Flags       HW address            Mask     Device";
+        let entries = parse_arp_table(content);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_arp_table_garbage_lines() {
+        let content = "\
+IP address       HW type     Flags       HW address            Mask     Device
+this is garbage data with no structure
+short
+192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0
+\x00\x01\x02\x03 binary garbage";
+        let entries = parse_arp_table(content);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].ip, Ipv4Addr::new(192, 168, 1, 1));
+    }
+
+    #[test]
+    fn test_parse_arp_table_invalid_ip() {
+        let content = "\
+IP address       HW type     Flags       HW address            Mask     Device
+999.999.999.999  0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0";
+        let entries = parse_arp_table(content);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_arp_table_invalid_mac() {
+        let content = "\
+IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.1      0x1         0x2         not-a-mac             *        wlan0";
+        let entries = parse_arp_table(content);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_parse_arp_table_incomplete_entry_skipped() {
+        let content = "\
+IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.1      0x1         0x0         00:00:00:00:00:00     *        wlan0";
+        let entries = parse_arp_table(content);
+        assert!(entries.is_empty()); // Both flag=0 and zero MAC
+    }
+
+    #[test]
+    fn test_parse_default_route_empty() {
+        assert!(parse_default_route("").is_none());
+    }
+
+    #[test]
+    fn test_parse_default_route_garbage() {
+        let content = "this is not a route table at all\nno really";
+        assert!(parse_default_route(content).is_none());
+    }
+
+    #[test]
+    fn test_parse_default_route_bad_hex_gateway() {
+        let content = "\
+Iface\tDestination\tGateway\tFlags
+wlan0\t00000000\tNOTHEX\t0003";
+        assert!(parse_default_route(content).is_none());
+    }
+
+    #[test]
+    fn test_hex_to_ipv4_empty() {
+        assert!(hex_to_ipv4("").is_none());
+    }
+
+    #[test]
+    fn test_hex_to_ipv4_too_large() {
+        assert!(hex_to_ipv4("FFFFFFFFFF").is_none()); // > u32
+    }
+
+    #[test]
+    fn test_hex_to_ipv4_invalid_chars() {
+        assert!(hex_to_ipv4("ZZZZZZZZ").is_none());
+    }
+
+    #[test]
+    fn test_mac_addr_zero_and_broadcast() {
+        assert!(MacAddr::ZERO.is_zero());
+        assert!(!MacAddr::ZERO.is_broadcast());
+        assert!(MacAddr([0xff; 6]).is_broadcast());
+        assert!(!MacAddr([0xff; 6]).is_zero());
+    }
+
+    #[test]
+    fn test_mac_addr_roundtrip() {
+        let original = "de:ad:be:ef:ca:fe";
+        let mac: MacAddr = original.parse().unwrap();
+        assert_eq!(format!("{}", mac), original);
+    }
+
+    #[test]
+    fn test_mac_addr_parse_too_many_octets() {
+        assert!("aa:bb:cc:dd:ee:ff:00".parse::<MacAddr>().is_err());
+    }
+
+    #[test]
+    fn test_mac_addr_parse_too_few_octets() {
+        assert!("aa:bb:cc".parse::<MacAddr>().is_err());
+    }
+
+    #[test]
+    fn test_mac_addr_parse_empty() {
+        assert!("".parse::<MacAddr>().is_err());
+    }
+
+    // === DNS parser adversarial tests ===
+
+    #[test]
+    fn test_dns_response_too_short() {
+        assert!(parse_dns_response(&[]).is_none());
+        assert!(parse_dns_response(&[0; 11]).is_none());
+    }
+
+    #[test]
+    fn test_dns_response_not_a_response() {
+        let mut packet = [0u8; 12];
+        // QR bit not set (query, not response)
+        packet[2] = 0x00;
+        assert!(parse_dns_response(&packet).is_none());
+    }
+
+    #[test]
+    fn test_dns_response_error_rcode() {
+        let mut packet = [0u8; 12];
+        packet[2] = 0x80; // QR=1
+        packet[3] = 0x03; // RCODE=3 (NXDOMAIN)
+        assert!(parse_dns_response(&packet).is_none());
+    }
+
+    #[test]
+    fn test_dns_response_zero_answers() {
+        let mut packet = [0u8; 12];
+        packet[2] = 0x80; // QR=1
+        packet[3] = 0x00; // RCODE=0
+        packet[6] = 0x00; // ANCOUNT=0
+        packet[7] = 0x00;
+        let result = parse_dns_response(&packet);
+        assert_eq!(result, Some(Vec::new()));
+    }
+
+    #[test]
+    fn test_dns_response_absurd_qdcount() {
+        let mut packet = [0u8; 12];
+        packet[2] = 0x80; // QR=1
+        packet[4] = 0xFF; // QDCOUNT=65535
+        packet[5] = 0xFF;
+        packet[6] = 0x00;
+        packet[7] = 0x01;
+        assert!(parse_dns_response(&packet).is_none());
+    }
+
+    #[test]
+    fn test_dns_response_absurd_ancount() {
+        let mut packet = [0u8; 12];
+        packet[2] = 0x80;
+        packet[6] = 0xFF; // ANCOUNT=65535
+        packet[7] = 0xFF;
+        assert!(parse_dns_response(&packet).is_none());
+    }
+
+    #[test]
+    fn test_dns_response_truncated_question() {
+        let mut packet = vec![0u8; 14]; // Header + 2 bytes (not enough for question)
+        packet[2] = 0x80; // QR=1
+        packet[4] = 0x00;
+        packet[5] = 0x01; // QDCOUNT=1
+        packet[6] = 0x00;
+        packet[7] = 0x01; // ANCOUNT=1
+        packet[12] = 0x05; // Label length 5, but only 1 byte follows
+        assert!(parse_dns_response(&packet).is_none());
+    }
+
+    #[test]
+    fn test_dns_response_truncated_answer() {
+        // Valid question, but answer truncated
+        let mut packet = vec![
+            0x00, 0x01, // ID
+            0x80, 0x00, // Flags
+            0x00, 0x01, // QDCOUNT
+            0x00, 0x01, // ANCOUNT
+            0x00, 0x00, 0x00, 0x00, // NS/AR
+        ];
+        // Question: a.com
+        packet.extend_from_slice(&[1, b'a', 3, b'c', b'o', b'm', 0]);
+        packet.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]); // QTYPE/QCLASS
+        // Answer: just a name pointer but no resource record data
+        packet.extend_from_slice(&[0xC0, 0x0C]); // pointer
+        // Only 2 bytes, need 10 for full RR header — should break gracefully
+        let result = parse_dns_response(&packet);
+        // Should return Some with empty vec (breaks out of answer loop gracefully)
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_dns_name_with_reserved_high_bit() {
+        // A label with the top bit set but not 0xC0 (reserved per RFC)
+        let mut packet = vec![0u8; 14];
+        packet[2] = 0x80;
+        packet[4] = 0x00;
+        packet[5] = 0x01;
+        packet[6] = 0x00;
+        packet[7] = 0x01;
+        packet[12] = 0x80; // Reserved label type
+        assert!(parse_dns_response(&packet).is_none());
+    }
+
+    #[test]
+    fn test_dns_name_label_too_long_for_packet() {
+        // Label says 200 bytes but packet is tiny
+        let mut packet = vec![0u8; 14];
+        packet[2] = 0x80;
+        packet[4] = 0x00;
+        packet[5] = 0x01;
+        packet[6] = 0x00;
+        packet[7] = 0x01;
+        packet[12] = 60; // 60 byte label, but only 2 bytes available
+        assert!(parse_dns_response(&packet).is_none());
+    }
+
+    #[test]
+    fn test_skip_dns_name_empty_packet() {
+        assert!(skip_dns_name(&[], 0).is_none());
+    }
+
+    #[test]
+    fn test_skip_dns_name_pointer_at_end() {
+        // Compression pointer at the very last byte (incomplete)
+        assert!(skip_dns_name(&[0xC0], 0).is_none());
+    }
+
+    #[test]
+    fn test_skip_dns_name_excessive_labels() {
+        // 200 labels of length 1 to test the label limit
+        let mut packet = Vec::new();
+        for _ in 0..200 {
+            packet.push(1); // label length
+            packet.push(b'a');
+        }
+        packet.push(0);
+        // Should return None due to DNS_MAX_NAME_LABELS limit
+        assert!(skip_dns_name(&packet, 0).is_none());
+    }
+
+    // === build_dns_query validation tests ===
+
+    #[test]
+    fn test_build_dns_query_empty_domain() {
+        assert!(build_dns_query(1, "").is_none());
+    }
+
+    #[test]
+    fn test_build_dns_query_too_long_domain() {
+        let long_domain = "a".repeat(254);
+        assert!(build_dns_query(1, &long_domain).is_none());
+    }
+
+    #[test]
+    fn test_build_dns_query_label_too_long() {
+        let long_label = format!("{}.com", "a".repeat(64));
+        assert!(build_dns_query(1, &long_label).is_none());
+    }
+
+    #[test]
+    fn test_build_dns_query_empty_label() {
+        assert!(build_dns_query(1, "example..com").is_none());
+    }
+
+    #[test]
+    fn test_build_dns_query_max_valid_label() {
+        let label = "a".repeat(63); // Max allowed
+        let domain = format!("{}.com", label);
+        assert!(build_dns_query(1, &domain).is_some());
+    }
+
+    #[test]
+    fn test_build_dns_query_single_label() {
+        let query = build_dns_query(1, "localhost").unwrap();
+        assert_eq!(query[12], 9); // "localhost" length
+    }
+
+    #[test]
+    fn test_resolve_mac_from_arp_found() {
+        let entries = vec![ArpEntry {
+            ip: Ipv4Addr::new(10, 0, 0, 1),
+            mac: MacAddr([0x11; 6]),
+            device: "eth0".into(),
+            flags: 2,
+        }];
+        assert_eq!(
+            resolve_mac_from_arp(&entries, Ipv4Addr::new(10, 0, 0, 1)),
+            Some(MacAddr([0x11; 6]))
+        );
+    }
+
+    #[test]
+    fn test_resolve_mac_from_arp_not_found() {
+        let entries = vec![ArpEntry {
+            ip: Ipv4Addr::new(10, 0, 0, 1),
+            mac: MacAddr([0x11; 6]),
+            device: "eth0".into(),
+            flags: 2,
+        }];
+        assert_eq!(
+            resolve_mac_from_arp(&entries, Ipv4Addr::new(10, 0, 0, 2)),
+            None
+        );
+    }
+
+    #[test]
+    fn test_resolve_mac_from_arp_empty() {
+        assert_eq!(
+            resolve_mac_from_arp(&[], Ipv4Addr::new(10, 0, 0, 1)),
+            None
+        );
+    }
+
+    #[test]
+    fn test_arp_entries_to_map_empty() {
+        let map = arp_entries_to_map(&[], None);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_arp_entries_to_map_nonexistent_interface() {
+        let entries = vec![ArpEntry {
+            ip: Ipv4Addr::new(10, 0, 0, 1),
+            mac: MacAddr([0x11; 6]),
+            device: "wlan0".into(),
+            flags: 2,
+        }];
+        let map = arp_entries_to_map(&entries, Some("eth99"));
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_parse_arp_table_large() {
+        // Simulate a large ARP table (1000 entries)
+        let mut content = String::from(
+            "IP address       HW type     Flags       HW address            Mask     Device\n",
+        );
+        for i in 0..1000u32 {
+            let b3 = (i / 256) as u8;
+            let b4 = (i % 256) as u8;
+            content.push_str(&format!(
+                "192.168.{}.{}    0x1         0x2         aa:bb:cc:00:{:02x}:{:02x}     *        wlan0\n",
+                b3, b4, b3, b4
+            ));
+        }
+        let entries = parse_arp_table(&content);
+        assert_eq!(entries.len(), 1000);
     }
 }
