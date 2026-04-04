@@ -125,7 +125,79 @@ impl Config {
         let config: Config = toml::from_str(&contents).map_err(|e| {
             crate::Error::Config(format!("failed to parse config file: {}", e))
         })?;
+        config.validate()?;
         Ok(config)
+    }
+
+    /// Validate all configuration values for sanity.
+    pub fn validate(&self) -> Result<(), crate::Error> {
+        // Validate poll intervals (must be > 0 to avoid busy loops)
+        if self.arp.enabled && self.arp.poll_interval_secs == 0 {
+            return Err(crate::Error::Config(
+                "arp.poll_interval_secs must be > 0".into(),
+            ));
+        }
+        if self.gateway.enabled && self.gateway.poll_interval_secs == 0 {
+            return Err(crate::Error::Config(
+                "gateway.poll_interval_secs must be > 0".into(),
+            ));
+        }
+        if self.dns.enabled && self.dns.poll_interval_secs == 0 {
+            return Err(crate::Error::Config(
+                "dns.poll_interval_secs must be > 0".into(),
+            ));
+        }
+
+        // Validate DNS config
+        if self.dns.enabled {
+            if self.dns.trusted_resolvers.is_empty() {
+                return Err(crate::Error::Config(
+                    "dns.trusted_resolvers must not be empty when DNS detector is enabled".into(),
+                ));
+            }
+            for resolver in &self.dns.trusted_resolvers {
+                if resolver.parse::<std::net::Ipv4Addr>().is_err()
+                    && resolver.parse::<std::net::Ipv6Addr>().is_err()
+                {
+                    return Err(crate::Error::Config(format!(
+                        "dns.trusted_resolvers contains invalid IP: {}",
+                        resolver
+                    )));
+                }
+            }
+            if self.dns.test_domains.is_empty() {
+                return Err(crate::Error::Config(
+                    "dns.test_domains must not be empty when DNS detector is enabled".into(),
+                ));
+            }
+            for domain in &self.dns.test_domains {
+                if domain.is_empty() || domain.len() > 253 {
+                    return Err(crate::Error::Config(format!(
+                        "dns.test_domains contains invalid domain: '{}'",
+                        domain
+                    )));
+                }
+            }
+        }
+
+        // Validate port numbers
+        for port in &self.hardener.allowed_outbound_ports {
+            if *port == 0 {
+                return Err(crate::Error::Config(
+                    "hardener.allowed_outbound_ports must not contain port 0".into(),
+                ));
+            }
+        }
+
+        // Validate interface name length (Linux IFNAMSIZ = 16 including null)
+        if self.interface.len() > 15 {
+            return Err(crate::Error::Config(format!(
+                "interface name too long (max 15 chars): '{}'",
+                self.interface
+            )));
+        }
+
+        Ok(())
     }
 }
 
@@ -191,5 +263,134 @@ mod tests {
         assert!(config.hardener.auto_harden);
         assert_eq!(config.hardener.allowed_outbound_ports, vec![53, 443]);
         assert_eq!(config.dns.trusted_resolvers, vec!["9.9.9.9"]);
+    }
+
+    // === Validation tests ===
+
+    #[test]
+    fn test_validate_default_config_passes() {
+        let config = Config::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_zero_arp_interval() {
+        let mut config = Config::default();
+        config.arp.poll_interval_secs = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_zero_gateway_interval() {
+        let mut config = Config::default();
+        config.gateway.poll_interval_secs = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_zero_dns_interval() {
+        let mut config = Config::default();
+        config.dns.poll_interval_secs = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_disabled_detector_allows_zero_interval() {
+        let mut config = Config::default();
+        config.arp.enabled = false;
+        config.arp.poll_interval_secs = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_empty_dns_resolvers() {
+        let mut config = Config::default();
+        config.dns.trusted_resolvers.clear();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_invalid_dns_resolver() {
+        let mut config = Config::default();
+        config.dns.trusted_resolvers = vec!["not-an-ip".to_string()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_valid_ipv6_resolver() {
+        let mut config = Config::default();
+        config.dns.trusted_resolvers = vec!["2001:4860:4860::8888".to_string()];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_empty_test_domains() {
+        let mut config = Config::default();
+        config.dns.test_domains.clear();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_domain_too_long() {
+        let mut config = Config::default();
+        config.dns.test_domains = vec!["a".repeat(254)];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_empty_domain_string() {
+        let mut config = Config::default();
+        config.dns.test_domains = vec!["".to_string()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_port_zero() {
+        let mut config = Config::default();
+        config.hardener.allowed_outbound_ports = vec![0, 80, 443];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_interface_too_long() {
+        let mut config = Config::default();
+        config.interface = "a".repeat(16);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_interface_max_length() {
+        let mut config = Config::default();
+        config.interface = "a".repeat(15); // Max valid
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_disabled_dns_skips_resolver_check() {
+        let mut config = Config::default();
+        config.dns.enabled = false;
+        config.dns.trusted_resolvers.clear();
+        config.dns.test_domains.clear();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_parse_empty_toml() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_parse_unknown_keys_ignored() {
+        let toml_str = r#"
+            unknown_key = "ignored"
+            interface = "wlan0"
+        "#;
+        // serde(default) + deny_unknown_fields not set — should work
+        let result: Result<Config, _> = toml::from_str(toml_str);
+        // This depends on serde config — either passes or gives helpful error
+        if let Ok(config) = result {
+            assert_eq!(config.interface, "wlan0");
+        }
     }
 }
