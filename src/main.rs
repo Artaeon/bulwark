@@ -1,3 +1,11 @@
+// Strict lints for a security tool — catch footguns at compile time.
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
+#![deny(arithmetic_overflow)]
+#![warn(clippy::cast_possible_truncation)]
+#![warn(clippy::cast_sign_loss)]
+
 mod alert;
 mod config;
 mod daemon;
@@ -55,7 +63,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         }
-    } else if cli.config == PathBuf::from("/etc/bulwark/bulwark.toml") {
+    } else if cli.config == std::path::Path::new("/etc/bulwark/bulwark.toml") {
         // Default path doesn't exist — use defaults
         config::Config::default()
     } else {
@@ -137,6 +145,7 @@ fn main() -> ExitCode {
     }
 
     // Check for root (most features need it)
+    // SAFETY: geteuid() is a simple syscall with no preconditions, no pointers, no UB risk.
     if unsafe { libc::geteuid() } != 0 {
         eprintln!("warning: bulwark should run as root for full functionality");
         eprintln!(
@@ -145,10 +154,16 @@ fn main() -> ExitCode {
     }
 
     // Run the daemon
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("failed to create tokio runtime");
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("fatal: failed to create tokio runtime: {}", e);
+            return ExitCode::FAILURE;
+        }
+    };
 
     rt.block_on(async {
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
@@ -156,12 +171,24 @@ fn main() -> ExitCode {
         // Handle SIGINT and SIGTERM for graceful shutdown
         let shutdown_tx_clone = shutdown_tx.clone();
         tokio::spawn(async move {
-            let mut sigint =
+            let mut sigint = match
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-                    .expect("failed to register SIGINT handler");
-            let mut sigterm =
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    error!(error = %e, "failed to register SIGINT handler");
+                    return;
+                }
+            };
+            let mut sigterm = match
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("failed to register SIGTERM handler");
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    error!(error = %e, "failed to register SIGTERM handler");
+                    return;
+                }
+            };
 
             tokio::select! {
                 _ = sigint.recv() => {
