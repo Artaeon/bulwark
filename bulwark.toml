@@ -47,3 +47,16 @@ listen_timeout_secs = 10
 enabled = false
 auto_harden = false
 allowed_outbound_ports = [53, 80, 443, 853, 993, 587]
+
+# Active protections (all require root)
+# These go beyond detection to actively harden your network stack.
+[protect]
+# Pin the gateway's MAC as a static ARP entry (prevents ARP spoofing entirely)
+arp_pin = false
+# Block all LAN traffic except gateway (prevents lateral attacks from other clients)
+client_isolation = false
+# Encrypt all DNS queries via DNS-over-TLS (prevents DNS poisoning at protocol level)
+dns_encrypt = false
+dns_resolvers = ["1.1.1.1:853", "8.8.8.8:853"]
+# Randomize MAC address on startup (prevents cross-network tracking)
+mac_randomize = false
