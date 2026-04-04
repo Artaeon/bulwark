@@ -166,13 +166,18 @@ async fn create_dhcp_listener(interface: &str) -> Result<tokio::net::UdpSocket, 
     let copy_len = iface_bytes.len().min(libc::IFNAMSIZ - 1);
     optval[..copy_len].copy_from_slice(&iface_bytes[..copy_len]);
 
+    // SAFETY: fd is a valid open socket file descriptor (from UdpSocket::bind),
+    // optval is a stack-allocated buffer with valid IFNAMSIZ size, and setsockopt
+    // with SO_BINDTODEVICE only reads from the provided buffer.
     let ret = unsafe {
         libc::setsockopt(
             fd,
             libc::SOL_SOCKET,
             libc::SO_BINDTODEVICE,
             optval.as_ptr() as *const libc::c_void,
-            std::mem::size_of_val(&optval) as libc::socklen_t,
+            // IFNAMSIZ is 16 bytes; this fits in socklen_t on all platforms.
+            #[allow(clippy::cast_possible_truncation)]
+            { std::mem::size_of_val(&optval) as libc::socklen_t },
         )
     };
     if ret < 0 {
@@ -295,15 +300,14 @@ fn parse_lease_servers(content: &str) -> Vec<Ipv4Addr> {
         let line = line.trim();
         // dhclient format: "option dhcp-server-identifier 192.168.1.1;"
         if line.starts_with("option dhcp-server-identifier") {
-            if let Some(ip_str) = line
+            if let Ok(ip) = line
                 .trim_start_matches("option dhcp-server-identifier")
                 .trim()
                 .trim_end_matches(';')
                 .trim()
                 .parse::<Ipv4Addr>()
-                .ok()
             {
-                servers.push(ip_str);
+                servers.push(ip);
             }
         }
     }
@@ -459,5 +463,124 @@ lease {
     fn test_parse_lease_servers_empty() {
         let servers = parse_lease_servers("");
         assert!(servers.is_empty());
+    }
+
+    // === Adversarial DHCP packet tests ===
+
+    #[test]
+    fn test_parse_dhcp_offer_exactly_minimum_size() {
+        // Exactly 240 bytes (236 + 4 magic cookie) with no options
+        let mut packet = vec![0u8; DHCP_OPTIONS_OFFSET + 4];
+        packet[DHCP_OP_OFFSET] = 2;
+        packet[DHCP_OPTIONS_OFFSET..DHCP_OPTIONS_OFFSET + 4]
+            .copy_from_slice(&DHCP_MAGIC_COOKIE);
+        // No options, no message type → not an OFFER
+        assert!(parse_dhcp_offer(&packet).is_none());
+    }
+
+    #[test]
+    fn test_parse_dhcp_offer_truncated_option() {
+        let mut packet = build_test_dhcp_offer(Ipv4Addr::new(10, 0, 0, 1), None);
+        // Truncate mid-option
+        packet.truncate(DHCP_OPTIONS_OFFSET + 5);
+        // Should not panic, just return None
+        assert!(parse_dhcp_offer(&packet).is_none());
+    }
+
+    #[test]
+    fn test_parse_dhcp_offer_option_length_overflow() {
+        let mut packet = vec![0u8; DHCP_OPTIONS_OFFSET + 4];
+        packet[DHCP_OP_OFFSET] = 2;
+        packet[DHCP_OPTIONS_OFFSET..DHCP_OPTIONS_OFFSET + 4]
+            .copy_from_slice(&DHCP_MAGIC_COOKIE);
+        // Option with length claiming 255 bytes but packet ends immediately
+        packet.push(53); // message type option
+        packet.push(255); // length = 255 (way past end of packet)
+        assert!(parse_dhcp_offer(&packet).is_none());
+    }
+
+    #[test]
+    fn test_parse_dhcp_offer_padding_options() {
+        let mut packet = vec![0u8; DHCP_OPTIONS_OFFSET + 4];
+        packet[DHCP_OP_OFFSET] = 2;
+        packet[1] = 1;
+        packet[2] = 6;
+        let server_ip = Ipv4Addr::new(10, 0, 0, 1);
+        let octets = server_ip.octets();
+        packet[DHCP_SIADDR_OFFSET] = octets[0];
+        packet[DHCP_SIADDR_OFFSET + 1] = octets[1];
+        packet[DHCP_SIADDR_OFFSET + 2] = octets[2];
+        packet[DHCP_SIADDR_OFFSET + 3] = octets[3];
+        packet[DHCP_OPTIONS_OFFSET..DHCP_OPTIONS_OFFSET + 4]
+            .copy_from_slice(&DHCP_MAGIC_COOKIE);
+        // Add padding bytes before the message type option
+        packet.push(0); // pad
+        packet.push(0); // pad
+        packet.push(0); // pad
+        packet.push(DHCP_OPT_MESSAGE_TYPE);
+        packet.push(1);
+        packet.push(DHCP_OFFER);
+        packet.push(DHCP_OPT_END);
+        let offer = parse_dhcp_offer(&packet);
+        assert!(offer.is_some());
+        assert_eq!(offer.unwrap().server_ip, server_ip);
+    }
+
+    #[test]
+    fn test_parse_dhcp_offer_wrong_message_type() {
+        let mut packet = build_test_dhcp_offer(Ipv4Addr::new(10, 0, 0, 1), None);
+        // Change message type to ACK (5) instead of OFFER (2)
+        // Find the message type option value
+        let opt_offset = DHCP_OPTIONS_OFFSET + 4 + 2; // after magic + opt code + length
+        packet[opt_offset] = 5; // ACK
+        assert!(parse_dhcp_offer(&packet).is_none());
+    }
+
+    #[test]
+    fn test_parse_dhcp_offer_all_zeros() {
+        let packet = vec![0u8; 300];
+        assert!(parse_dhcp_offer(&packet).is_none());
+    }
+
+    #[test]
+    fn test_parse_dhcp_offer_all_ones() {
+        let packet = vec![0xFFu8; 300];
+        assert!(parse_dhcp_offer(&packet).is_none());
+    }
+
+    #[test]
+    fn test_parse_lease_servers_malformed_ip() {
+        let content = "option dhcp-server-identifier not-an-ip;\n";
+        let servers = parse_lease_servers(content);
+        assert!(servers.is_empty());
+    }
+
+    #[test]
+    fn test_parse_lease_servers_multiple() {
+        let content = "\
+lease {
+  option dhcp-server-identifier 192.168.1.1;
+}
+lease {
+  option dhcp-server-identifier 10.0.0.1;
+}
+";
+        let servers = parse_lease_servers(content);
+        assert_eq!(
+            servers,
+            vec![Ipv4Addr::new(192, 168, 1, 1), Ipv4Addr::new(10, 0, 0, 1)]
+        );
+    }
+
+    #[test]
+    fn test_check_server_multiple_rogues() {
+        let mut det = DhcpDetector::new(DhcpConfig::default(), "wlan0".into());
+        let legit = Ipv4Addr::new(192, 168, 1, 1);
+        det.check_server(legit); // baseline
+        // Multiple different rogues should all be detected
+        assert!(det.check_server(Ipv4Addr::new(10, 0, 0, 1)).is_some());
+        assert!(det.check_server(Ipv4Addr::new(172, 16, 0, 1)).is_some());
+        // Original still OK
+        assert!(det.check_server(legit).is_none());
     }
 }
