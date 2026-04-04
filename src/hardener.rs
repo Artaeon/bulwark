@@ -1,3 +1,18 @@
+//! nftables-based firewall hardener.
+//!
+//! When activated (manually or by auto-harden), the [`Hardener`] generates and
+//! applies a restrictive nftables ruleset under a dedicated `inet bulwark` table:
+//!
+//! - **Input**: drop all, allow loopback + established + DHCP + essential ICMP
+//! - **Output**: drop all, allow loopback + established + DHCP + DNS + configured ports + ICMP
+//!
+//! On deactivation, the entire table is deleted — no residual rules remain.
+//!
+//! # Auto-hardening
+//!
+//! When `auto_harden = true`, the hardener activates automatically on the first
+//! threat with severity >= High. It stays active until the daemon shuts down.
+
 use std::process::Command;
 
 use tracing::{info, warn};

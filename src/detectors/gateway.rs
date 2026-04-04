@@ -1,3 +1,15 @@
+//! Default gateway change detector.
+//!
+//! Monitors the default gateway by polling `/proc/net/route` and cross-referencing
+//! with `/proc/net/arp` to track both the gateway IP and its MAC address.
+//!
+//! Detects:
+//!
+//! - **Gateway IP change** (High) — the default route now points to a different IP,
+//!   which may indicate an evil twin AP or rogue gateway.
+//! - **Gateway MAC change** (Critical) — same gateway IP but different MAC address,
+//!   the strongest indicator of active ARP poisoning targeting the gateway itself.
+
 use std::net::Ipv4Addr;
 use std::time::Duration;
 

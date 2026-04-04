@@ -1,3 +1,17 @@
+//! Threat and alert types for inter-component communication.
+//!
+//! This module defines the vocabulary of threats that bulwark can detect.
+//! Each detector produces [`Threat`] values containing a [`ThreatKind`] variant,
+//! a [`Severity`] level, and metadata. Threats flow through an `mpsc` channel
+//! from detectors to the daemon's central event loop.
+//!
+//! # Severity levels
+//!
+//! - **Low** — Informational anomaly, may not indicate an attack
+//! - **Medium** — Suspicious activity that warrants attention
+//! - **High** — Likely active attack (triggers auto-hardening if enabled)
+//! - **Critical** — Confirmed attack indicator (always triggers auto-hardening)
+
 use std::fmt;
 use std::net::Ipv4Addr;
 use std::time::SystemTime;

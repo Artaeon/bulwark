@@ -1,3 +1,8 @@
+//! Central error types for the bulwark daemon.
+//!
+//! All fallible operations in bulwark return [`Error`], which covers configuration
+//! parsing, network operations, I/O, and firewall management failures.
+
 /// Central error type for bulwark.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

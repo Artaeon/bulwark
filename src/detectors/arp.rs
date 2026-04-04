@@ -1,3 +1,17 @@
+//! ARP spoof and flood detector.
+//!
+//! Polls `/proc/net/arp` at configurable intervals and maintains a baseline
+//! of MAC-IP bindings. Detects:
+//!
+//! - **ARP spoofing** (Critical) — a known IP's MAC address changes, indicating
+//!   an attacker is poisoning the ARP cache to intercept traffic.
+//! - **ARP flooding** (High) — a burst of new ARP entries in a short window,
+//!   indicating network scanning or ARP poisoning preparation.
+//!
+//! The core detection logic in [`ArpDetector::analyze`] is a pure function
+//! that accepts ARP table content as a string, making it fully testable
+//! without filesystem or network access.
+
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};

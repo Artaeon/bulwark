@@ -1,3 +1,17 @@
+//! Rogue DHCP server detector.
+//!
+//! Monitors for multiple DHCP servers on the network. The primary mode uses a
+//! UDP socket bound to port 68 with `SO_BINDTODEVICE` for the monitored interface.
+//! Falls back to parsing dhclient lease files if raw socket creation fails (non-root).
+//!
+//! Includes a full DHCP OFFER packet parser that validates the magic cookie,
+//! extracts the message type and server identifier from options, and handles
+//! padding bytes and truncated packets gracefully.
+//!
+//! The first DHCP server seen becomes the baseline — any subsequent different
+//! server triggers a **Critical** alert, as rogue DHCP servers are a primary
+//! component of evil twin and rogue AP attacks.
+
 use std::net::Ipv4Addr;
 use std::time::Duration;
 

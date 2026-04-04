@@ -1,3 +1,20 @@
+//! Network utility types and parsers.
+//!
+//! This module provides the low-level building blocks used by all detectors:
+//!
+//! - [`MacAddr`] — A 6-byte MAC address with `Display`/`FromStr`
+//! - [`parse_arp_table`] — Parse `/proc/net/arp` into structured entries
+//! - [`parse_default_route`] — Extract the default gateway from `/proc/net/route`
+//! - [`build_dns_query`] / [`parse_dns_response`] — Minimal DNS A-record codec
+//!
+//! # Security
+//!
+//! All parsers are hardened against adversarial input:
+//! - Bounds-checked at every access
+//! - Loop-limited to prevent infinite traversal
+//! - `checked_add()` on all offset arithmetic
+//! - Graceful rejection (return `None`) on malformed data
+
 use std::collections::HashMap;
 use std::fmt;
 use std::net::Ipv4Addr;

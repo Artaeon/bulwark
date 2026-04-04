@@ -1,3 +1,16 @@
+//! TOML-based configuration for the bulwark daemon.
+//!
+//! All configuration structs derive [`Default`] with sensible production values,
+//! so bulwark can run with zero configuration. When a config file is loaded via
+//! [`Config::load`], all values are validated before the daemon starts.
+//!
+//! # Validation
+//!
+//! - Poll intervals must be > 0 to prevent busy loops
+//! - DNS resolvers must be valid IPv4/IPv6 addresses
+//! - Test domains must conform to RFC 1035 limits
+//! - Interface names must fit Linux `IFNAMSIZ` (15 chars)
+
 use serde::Deserialize;
 use std::path::Path;
 

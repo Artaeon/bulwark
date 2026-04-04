@@ -1,3 +1,19 @@
+//! DNS poisoning detector.
+//!
+//! Periodically resolves configured test domains via both the system resolver
+//! (from `/etc/resolv.conf`) and trusted resolvers (Cloudflare 1.1.1.1,
+//! Google 8.8.8.8 by default).
+//!
+//! Uses the minimal DNS query/response codec from [`crate::net_util`] to send
+//! raw UDP queries, avoiding dependency on system resolver libraries.
+//!
+//! # Detection logic
+//!
+//! Results are compared using set intersection. Only when there is **zero overlap**
+//! between system and trusted results is a poisoning alert raised. This avoids
+//! false positives from CDN IP variation, where different resolvers legitimately
+//! return different IP addresses for the same domain.
+
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;

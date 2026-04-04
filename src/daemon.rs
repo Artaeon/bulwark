@@ -1,3 +1,14 @@
+//! Central daemon orchestrator.
+//!
+//! The [`Daemon`] is the heart of bulwark. It:
+//!
+//! 1. Auto-detects the wireless interface (or uses the configured one)
+//! 2. Spawns enabled detectors as independent tokio tasks
+//! 3. Receives [`Threat`](crate::alert::Threat) events through an `mpsc` channel
+//! 4. Deduplicates repeated alerts to prevent log flooding
+//! 5. Dispatches threats to the [`Hardener`](crate::hardener::Hardener) for auto-response
+//! 6. Handles graceful shutdown with firewall rollback
+
 use std::collections::HashMap;
 use std::time::Instant;
 
