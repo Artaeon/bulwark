@@ -24,6 +24,7 @@ pub struct Config {
     pub dns: DnsConfig,
     pub dhcp: DhcpConfig,
     pub hardener: HardenerConfig,
+    pub protect: ProtectConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,6 +65,37 @@ pub struct HardenerConfig {
     pub allowed_outbound_ports: Vec<u16>,
 }
 
+/// Configuration for active network protections.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ProtectConfig {
+    /// Pin the gateway's MAC as a static ARP entry to prevent ARP spoofing.
+    pub arp_pin: bool,
+    /// Block all LAN traffic except the gateway to prevent lateral attacks.
+    pub client_isolation: bool,
+    /// Encrypt all DNS queries via DNS-over-TLS.
+    pub dns_encrypt: bool,
+    /// TLS resolvers for DNS encryption (default: 1.1.1.1:853, 8.8.8.8:853).
+    pub dns_resolvers: Vec<String>,
+    /// Randomize the MAC address on startup to prevent tracking.
+    pub mac_randomize: bool,
+}
+
+impl Default for ProtectConfig {
+    fn default() -> Self {
+        Self {
+            arp_pin: false,
+            client_isolation: false,
+            dns_encrypt: false,
+            dns_resolvers: vec![
+                "1.1.1.1:853".to_string(),
+                "8.8.8.8:853".to_string(),
+            ],
+            mac_randomize: false,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -74,6 +106,7 @@ impl Default for Config {
             dns: DnsConfig::default(),
             dhcp: DhcpConfig::default(),
             hardener: HardenerConfig::default(),
+            protect: ProtectConfig::default(),
         }
     }
 }

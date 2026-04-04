@@ -22,6 +22,10 @@ use crate::detectors::dhcp::DhcpDetector;
 use crate::detectors::dns::DnsDetector;
 use crate::detectors::gateway::GatewayDetector;
 use crate::hardener::Hardener;
+use crate::protect::arp_pin::ArpPin;
+use crate::protect::dns_crypt::{DnsCrypt, DnsCryptConfig};
+use crate::protect::isolation::ClientIsolation;
+use crate::protect::mac_rand::MacRandomizer;
 
 const CHANNEL_CAPACITY: usize = 256;
 
@@ -84,7 +88,8 @@ impl Daemon {
     }
 
     /// Run the daemon: spawn detectors and process threats.
-    pub async fn run(self, mut shutdown: tokio::sync::broadcast::Receiver<()>) -> Result<(), crate::Error> {
+    pub async fn run(self, shutdown_tx: tokio::sync::broadcast::Sender<()>) -> Result<(), crate::Error> {
+        let mut shutdown = shutdown_tx.subscribe();
         let (tx, mut rx) = mpsc::channel::<Threat>(CHANNEL_CAPACITY);
 
         let interface = if self.config.interface.is_empty() {
@@ -164,15 +169,77 @@ impl Daemon {
             None
         };
 
+        // === Activate protections ===
+        let protect_iface = if interface.is_empty() { "wlan0".to_string() } else { interface.clone() };
+
+        // MAC randomization (must be first — changes the interface MAC before other setup)
+        let mut mac_randomizer = if self.config.protect.mac_randomize {
+            let mut r = MacRandomizer::new(protect_iface.clone());
+            if let Err(e) = r.activate() {
+                warn!(error = %e, "MAC randomization failed (need root)");
+            }
+            Some(r)
+        } else {
+            None
+        };
+
+        // ARP gateway pinning
+        let mut arp_pin = if self.config.protect.arp_pin {
+            let mut pin = ArpPin::new();
+            if let Err(e) = pin.activate() {
+                warn!(error = %e, "ARP gateway pinning failed (need root)");
+            }
+            Some(pin)
+        } else {
+            None
+        };
+
+        // Client isolation
+        let mut client_isolation = if self.config.protect.client_isolation {
+            let mut iso = ClientIsolation::new();
+            if let Err(e) = iso.activate(&protect_iface) {
+                warn!(error = %e, "client isolation failed (need root + nft)");
+            }
+            Some(iso)
+        } else {
+            None
+        };
+
+        // DNS-over-TLS proxy
+        let mut dns_crypt = if self.config.protect.dns_encrypt {
+            let config = DnsCryptConfig {
+                resolvers: self.config.protect.dns_resolvers.clone(),
+            };
+            let mut dc = DnsCrypt::new(config.clone());
+            if let Err(e) = dc.activate_redirect() {
+                warn!(error = %e, "DNS encryption redirect failed (need root + nft)");
+            }
+            // Spawn the proxy task
+            let proxy_shutdown = shutdown_tx.subscribe();
+            let dc_proxy = DnsCrypt::new(config);
+            task_handles.push(tokio::spawn(async move {
+                if let Err(e) = dc_proxy.run_proxy(proxy_shutdown).await {
+                    error!(error = %e, "DNS-over-TLS proxy failed");
+                }
+            }));
+            Some(dc)
+        } else {
+            None
+        };
+
         let active_count = task_handles.len();
         info!(
             detectors = active_count,
             hardener = self.config.hardener.enabled,
+            arp_pin = self.config.protect.arp_pin,
+            client_isolation = self.config.protect.client_isolation,
+            dns_encrypt = self.config.protect.dns_encrypt,
+            mac_randomize = self.config.protect.mac_randomize,
             "bulwark daemon running"
         );
 
-        if active_count == 0 {
-            warn!("no detectors enabled — nothing to monitor");
+        if active_count == 0 && !self.config.protect.arp_pin && !self.config.protect.client_isolation && !self.config.protect.dns_encrypt && !self.config.protect.mac_randomize {
+            warn!("no detectors or protections enabled — nothing to do");
             return Ok(());
         }
 
@@ -249,12 +316,42 @@ impl Daemon {
             );
         }
 
-        // Cleanup: deactivate hardener if active
+        // === Cleanup: deactivate everything in reverse order ===
+
+        // Deactivate hardener
         if let Some(ref mut h) = hardener {
             if h.is_active() {
                 if let Err(e) = h.deactivate() {
                     error!(error = %e, "failed to deactivate hardener during shutdown");
                 }
+            }
+        }
+
+        // Deactivate DNS encryption
+        if let Some(ref mut dc) = dns_crypt {
+            if let Err(e) = dc.deactivate_redirect() {
+                error!(error = %e, "failed to deactivate DNS encryption during shutdown");
+            }
+        }
+
+        // Deactivate client isolation
+        if let Some(ref mut iso) = client_isolation {
+            if let Err(e) = iso.deactivate() {
+                error!(error = %e, "failed to deactivate client isolation during shutdown");
+            }
+        }
+
+        // Remove ARP pin
+        if let Some(ref mut pin) = arp_pin {
+            if let Err(e) = pin.deactivate() {
+                error!(error = %e, "failed to remove ARP pin during shutdown");
+            }
+        }
+
+        // Restore original MAC (last — interface must be up for other cleanup)
+        if let Some(ref mut r) = mac_randomizer {
+            if let Err(e) = r.deactivate() {
+                error!(error = %e, "failed to restore MAC during shutdown");
             }
         }
 
@@ -315,10 +412,9 @@ mod tests {
         config.dhcp.enabled = false;
 
         let daemon = Daemon::new(config);
-        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
-        drop(shutdown_tx); // Will cause immediate shutdown
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::broadcast::channel(1);
 
-        let result = daemon.run(shutdown_rx).await;
+        let result = daemon.run(shutdown_tx).await;
         assert!(result.is_ok());
     }
 

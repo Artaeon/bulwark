@@ -13,6 +13,7 @@ mod detectors;
 mod error;
 mod hardener;
 mod net_util;
+mod protect;
 
 pub use error::Error;
 
@@ -134,6 +135,23 @@ fn main() -> ExitCode {
                 "disabled"
             }
         );
+        println!("  Protections:");
+        println!(
+            "    ARP pinning: {}",
+            if config.protect.arp_pin { "enabled" } else { "disabled" }
+        );
+        println!(
+            "    Client isolation: {}",
+            if config.protect.client_isolation { "enabled" } else { "disabled" }
+        );
+        println!(
+            "    DNS encryption: {}",
+            if config.protect.dns_encrypt { "enabled" } else { "disabled" }
+        );
+        println!(
+            "    MAC randomization: {}",
+            if config.protect.mac_randomize { "enabled" } else { "disabled" }
+        );
         return ExitCode::SUCCESS;
     }
 
@@ -166,7 +184,7 @@ fn main() -> ExitCode {
     };
 
     rt.block_on(async {
-        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
 
         // Handle SIGINT and SIGTERM for graceful shutdown
         let shutdown_tx_clone = shutdown_tx.clone();
@@ -207,7 +225,7 @@ fn main() -> ExitCode {
         );
 
         let daemon = daemon::Daemon::new(config);
-        if let Err(e) = daemon.run(shutdown_rx).await {
+        if let Err(e) = daemon.run(shutdown_tx).await {
             error!(error = %e, "daemon failed");
             std::process::exit(1);
         }
