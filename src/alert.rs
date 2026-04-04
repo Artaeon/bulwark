@@ -146,4 +146,90 @@ mod tests {
         assert!(Severity::Medium < Severity::High);
         assert!(Severity::High < Severity::Critical);
     }
+
+    #[test]
+    fn test_severity_display() {
+        assert_eq!(format!("{}", Severity::Low), "LOW");
+        assert_eq!(format!("{}", Severity::Medium), "MEDIUM");
+        assert_eq!(format!("{}", Severity::High), "HIGH");
+        assert_eq!(format!("{}", Severity::Critical), "CRITICAL");
+    }
+
+    #[test]
+    fn test_all_threat_kinds_display() {
+        let kinds = vec![
+            ThreatKind::ArpSpoof {
+                ip: Ipv4Addr::new(10, 0, 0, 1),
+                old_mac: MacAddr([0xaa; 6]),
+                new_mac: MacAddr([0xbb; 6]),
+            },
+            ThreatKind::ArpFlood {
+                new_entries: 50,
+                window_secs: 5,
+            },
+            ThreatKind::GatewayIpChanged {
+                old_ip: Ipv4Addr::new(192, 168, 1, 1),
+                new_ip: Ipv4Addr::new(10, 0, 0, 1),
+            },
+            ThreatKind::GatewayMacChanged {
+                gateway_ip: Ipv4Addr::new(192, 168, 1, 1),
+                old_mac: MacAddr([0xaa; 6]),
+                new_mac: MacAddr([0xbb; 6]),
+            },
+            ThreatKind::RogueDhcpServer {
+                expected_server: Ipv4Addr::new(192, 168, 1, 1),
+                rogue_server: Ipv4Addr::new(10, 0, 0, 99),
+            },
+            ThreatKind::DnsPoisoning {
+                domain: "evil.com".to_string(),
+                system_results: vec![Ipv4Addr::new(1, 2, 3, 4)],
+                trusted_results: vec![Ipv4Addr::new(5, 6, 7, 8)],
+            },
+        ];
+
+        // All Display impls should produce non-empty, non-panicking output
+        for kind in kinds {
+            let s = format!("{}", kind);
+            assert!(!s.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_threat_has_timestamp() {
+        let before = std::time::SystemTime::now();
+        let threat = Threat::new(
+            ThreatKind::ArpFlood {
+                new_entries: 10,
+                window_secs: 5,
+            },
+            Severity::High,
+            "arp",
+        );
+        let after = std::time::SystemTime::now();
+        assert!(threat.timestamp >= before);
+        assert!(threat.timestamp <= after);
+    }
+
+    #[test]
+    fn test_threat_display_contains_all_parts() {
+        let threat = Threat::new(
+            ThreatKind::GatewayIpChanged {
+                old_ip: Ipv4Addr::new(192, 168, 1, 1),
+                new_ip: Ipv4Addr::new(10, 0, 0, 1),
+            },
+            Severity::High,
+            "gateway",
+        );
+        let s = format!("{}", threat);
+        assert!(s.contains("HIGH"));
+        assert!(s.contains("gateway"));
+        assert!(s.contains("192.168.1.1"));
+        assert!(s.contains("10.0.0.1"));
+    }
+
+    #[test]
+    fn test_severity_equality() {
+        assert_eq!(Severity::Critical, Severity::Critical);
+        assert_ne!(Severity::Low, Severity::High);
+    }
 }
