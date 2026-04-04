@@ -1,198 +1,350 @@
-# bulwark
+<p align="center">
+  <img src="assets/banner.svg" alt="bulwark" width="100%"/>
+</p>
 
-**Network security daemon for open/untrusted wireless networks.**
+<p align="center">
+  <strong>Real-time threat detection and firewall hardening for open wireless networks.</strong>
+</p>
 
-bulwark is a lightweight Linux daemon written in Rust that continuously monitors your network environment and alerts you to active attacks commonly found on open WiFi networks — coffee shops, airports, hotels, conferences.
+<p align="center">
+  <a href="#installation">Install</a> &middot;
+  <a href="#quick-start">Quick Start</a> &middot;
+  <a href="#configuration">Configure</a> &middot;
+  <a href="#threat-model">Threat Model</a> &middot;
+  <a href="#architecture">Architecture</a>
+</p>
 
-It detects ARP spoofing, gateway hijacking, DNS poisoning, and rogue DHCP servers in real-time, and can optionally auto-harden your firewall when threats are detected.
+<p align="center">
+  <img alt="Language" src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"/>
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Linux-lightgrey?style=flat-square"/>
+  <img alt="Tests" src="https://img.shields.io/badge/tests-155%20passing-brightgreen?style=flat-square"/>
+</p>
 
-## Why
+---
 
-Open WiFi is hostile territory. Anyone on the same network can:
+## Overview
 
-- **ARP spoof** your gateway and silently intercept all your traffic (Man-in-the-Middle)
-- **Run a rogue DHCP server** to redirect your DNS and gateway to attacker-controlled infrastructure
-- **Poison your DNS** responses to redirect you to phishing sites
-- **Hijack your gateway** by swapping the default route mid-session
+**bulwark** is a lightweight Linux daemon that monitors your network for active attacks commonly found on open WiFi — coffee shops, airports, hotels, conferences — and optionally locks down your firewall the moment a threat is detected.
 
-Most people have no idea when this is happening. bulwark watches for it and tells you immediately.
+It watches for **ARP spoofing**, **gateway hijacking**, **DNS poisoning**, and **rogue DHCP servers** in real-time. Everything runs as async tasks with zero external dependencies beyond the kernel's `/proc` filesystem and `nftables`.
 
-## Features
+```
+$ sudo bulwark --foreground
 
-### Detection
+2026-04-04T14:23:01 INFO  bulwark starting                    version=0.1.0
+2026-04-04T14:23:01 INFO  monitoring interface                 interface=wlan0
+2026-04-04T14:23:01 INFO  established ARP baseline             entries=4
+2026-04-04T14:23:01 INFO  established gateway baseline         gateway_ip=192.168.1.1 gateway_mac=aa:bb:cc:dd:ee:ff
+2026-04-04T14:23:01 INFO  bulwark daemon running               detectors=4 hardener=false
 
-| Detector | What it catches | How it works | Severity |
-|---|---|---|---|
-| **ARP Spoof** | Man-in-the-Middle via ARP poisoning | Tracks MAC-IP bindings from `/proc/net/arp`, alerts on changes | Critical |
-| **ARP Flood** | Network scanning, ARP poisoning prep | Detects rapid new ARP entries in a time window | High |
-| **Gateway Hijack** | Evil twin AP, rogue gateway | Monitors default gateway IP + MAC via `/proc/net/route` | Critical |
-| **DNS Poisoning** | Phishing via DNS manipulation | Compares system resolver vs trusted resolvers (1.1.1.1, 8.8.8.8) | High |
-| **Rogue DHCP** | Rogue AP, evil twin infrastructure | Monitors DHCP offers, flags multiple DHCP servers | Critical |
+2026-04-04T14:23:06 ERROR THREAT: ARP spoof: 192.168.1.1 changed from aa:bb:cc:dd:ee:ff to de:ad:be:ef:00:01
+                          severity=CRITICAL detector=arp
+2026-04-04T14:23:06 WARN  high-severity threat detected, auto-activating firewall hardening
+2026-04-04T14:23:06 INFO  firewall hardening activated
+```
 
-### Response
+---
 
-- **Firewall auto-hardening** (nftables) — when a high-severity threat is detected, bulwark can automatically:
-  - Drop all inbound traffic except established connections
-  - Restrict outbound to essential ports only (DNS, HTTP/S, etc.)
-  - Allow only DHCP and ICMP for basic connectivity
-  - Clean rollback on shutdown
+## Threat Model
+
+Open WiFi is hostile territory. Anyone on the same network can execute these attacks with off-the-shelf tools:
+
+### What bulwark detects
+
+| Attack | Technique | Real-world tool | bulwark detector | Severity |
+|:---|:---|:---|:---|:---:|
+| **Man-in-the-Middle** | ARP cache poisoning swaps the gateway's MAC in your ARP table, routing all traffic through the attacker | `arpspoof`, `ettercap`, `bettercap` | ARP Spoof | Critical |
+| **Network reconnaissance** | Rapid ARP scanning to map all hosts on the network before launching targeted attacks | `arp-scan`, `nmap -sn` | ARP Flood | High |
+| **Evil twin / rogue AP** | Attacker sets up a fake access point; your machine's default gateway changes to attacker infrastructure | `hostapd`, `wifiphisher` | Gateway Hijack | Critical |
+| **DNS hijacking** | Poisoned DNS responses redirect domains to attacker-controlled IPs for credential phishing | `dnsspoof`, `bettercap` | DNS Poisoning | High |
+| **Rogue DHCP** | Unauthorized DHCP server assigns attacker-controlled DNS/gateway to new clients | `dnsmasq`, `yersinia` | Rogue DHCP | Critical |
+
+### What bulwark does NOT protect against
+
+| Threat | Why | Mitigation |
+|:---|:---|:---|
+| Passive sniffing | Open WiFi is unencrypted at L2; bulwark can't change physics | VPN / WireGuard |
+| SSL stripping | Application-layer attack | HSTS preload, HTTPS-only mode |
+| Attacks on other devices | bulwark protects the machine it runs on | Deploy per-device |
+| Kernel exploits | Requires host-level compromise first | Keep kernel patched |
+
+**Best combined with:** VPN or WireGuard, DNS-over-HTTPS/TLS, browser HTTPS-only mode.
+
+---
+
+## Detection & Response
+
+### Detectors
+
+Each detector runs as an independent async task, polling at configurable intervals:
+
+**ARP Spoof Detector** — Polls `/proc/net/arp`, maintains a baseline of MAC-IP bindings, and fires a **Critical** alert when a known IP's MAC address changes. This is the primary indicator of ARP cache poisoning.
+
+**ARP Flood Detector** — Tracks the rate of new ARP entries within a sliding window. A burst of 10+ new entries in 5 seconds indicates active network scanning or ARP poisoning preparation (**High**).
+
+**Gateway Change Detector** — Monitors the default route via `/proc/net/route` and cross-references the gateway's MAC from the ARP table. Detects both gateway IP changes (**High** — possible evil twin) and gateway MAC changes on the same IP (**Critical** — active ARP poisoning of the gateway itself).
+
+**DNS Poisoning Detector** — Periodically resolves configured test domains through both the system resolver (from `/etc/resolv.conf`) and trusted resolvers (Cloudflare 1.1.1.1, Google 8.8.8.8 by default). Uses set intersection to compare results — only alerts when there is **zero overlap**, avoiding false positives from CDN IP variation.
+
+**Rogue DHCP Detector** — Listens for DHCP OFFER packets on the monitored interface using `SO_BINDTODEVICE`. The first DHCP server seen becomes the baseline; any subsequent different server triggers a **Critical** alert. Falls back to parsing dhclient lease files when raw sockets are unavailable.
+
+### Firewall Hardener
+
+When enabled, bulwark can auto-activate an nftables ruleset in response to high-severity threats:
+
+```
+table inet bulwark {
+    chain bulwark_input {
+        type filter hook input priority 0; policy drop;
+        iif lo accept
+        ct state established,related accept
+        udp sport 67 udp dport 68 accept          # DHCP
+        ip protocol icmp icmp type { echo-reply, destination-unreachable, time-exceeded } accept
+        counter log prefix "bulwark_drop_in: " drop
+    }
+    chain bulwark_output {
+        type filter hook output priority 0; policy drop;
+        oif lo accept
+        ct state established,related accept
+        udp sport 68 udp dport 67 accept           # DHCP
+        udp dport 53 accept                         # DNS
+        tcp dport 53 accept
+        tcp dport { 80, 443, 853, 993, 587 } accept # Configured ports
+        ip protocol icmp icmp type echo-request accept
+        counter log prefix "bulwark_drop_out: " drop
+    }
+}
+```
+
+Rules are applied via `nft -f -` (stdin) and managed under a dedicated `inet bulwark` table for clean activation and rollback. On shutdown, bulwark deletes the table entirely — no residual rules.
+
+### Threat Deduplication
+
+bulwark deduplicates repeated identical alerts within a 60-second window to prevent log flooding. A persistent ARP spoof fires once, not every 5-second poll cycle. Counters are logged at shutdown so you know exactly how many events were suppressed.
+
+---
 
 ## Installation
 
 ### From source
 
 ```bash
-# Clone and build
-git clone https://github.com/yourusername/bulwark.git
+git clone https://github.com/Artaeon/bulwark.git
 cd bulwark
 cargo build --release
 
-# Install binary
-sudo cp target/release/bulwark /usr/local/bin/
+# Install
+sudo install -m 755 target/release/bulwark /usr/local/bin/
+sudo install -d /etc/bulwark
+sudo install -m 644 bulwark.toml /etc/bulwark/
 
-# Install config
-sudo mkdir -p /etc/bulwark
-sudo cp bulwark.toml /etc/bulwark/
-
-# Install systemd service (optional)
-sudo cp bulwark.service /etc/systemd/system/
+# Optional: systemd service
+sudo install -m 644 bulwark.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now bulwark
 ```
 
 ### Requirements
 
-- Linux (uses `/proc/net/arp`, `/proc/net/route`, nftables)
-- Root or `CAP_NET_RAW` + `CAP_NET_ADMIN` capabilities
-- nftables (for firewall hardening feature)
+| Requirement | Notes |
+|:---|:---|
+| **Linux** | Uses `/proc/net/arp`, `/proc/net/route`, `/sys/class/net/` |
+| **Root** or capabilities | `CAP_NET_RAW` for DHCP listener, `CAP_NET_ADMIN` for nftables |
+| **nftables** | Only required if firewall hardener is enabled |
+| **Rust 1.70+** | For building from source |
 
-## Usage
+---
 
-### Quick start
+## Quick Start
 
 ```bash
-# Run in foreground with default settings (auto-detects wireless interface)
+# Run in foreground with all defaults (auto-detects wireless interface)
 sudo bulwark --foreground
 
-# Run with custom config
-sudo bulwark --foreground --config /path/to/bulwark.toml
+# Custom config file
+sudo bulwark --foreground --config ./bulwark.toml
 
-# Increase verbosity
+# Debug verbosity
 sudo bulwark --foreground --log-level debug
-```
 
-### Validate configuration
+# Validate config without running
+bulwark --check-config --config ./bulwark.toml
 
-```bash
-bulwark --check-config
-# Configuration OK
-#   Interface: (auto-detect)
-#   ARP detector: enabled
-#   Gateway detector: enabled
-#   DNS detector: enabled
-#   DHCP detector: enabled
-#   Hardener: disabled
-```
-
-### Preview firewall rules
-
-```bash
+# Preview the nftables ruleset that would be applied
 bulwark --print-rules
 ```
 
-### Run as systemd service
+### As a systemd service
 
 ```bash
 sudo systemctl start bulwark
-sudo journalctl -u bulwark -f   # follow logs
+sudo journalctl -u bulwark -f    # follow live output
 ```
+
+The service runs with systemd hardening: `ProtectSystem=strict`, `ProtectHome=true`, `PrivateTmp=true`.
+
+---
 
 ## Configuration
 
-bulwark uses a TOML configuration file. All settings have sensible defaults — you can run it with no config at all.
+All settings have sensible defaults. bulwark runs out of the box with zero configuration.
 
 ```toml
-# Wireless interface to monitor (empty = auto-detect)
+# /etc/bulwark/bulwark.toml
+
+# Wireless interface to monitor (empty = auto-detect via /sys/class/net/*/wireless)
 interface = ""
+
+# Log level: trace, debug, info, warn, error
 log_level = "info"
 
-# ARP spoof detection — polls /proc/net/arp
+# ── ARP spoof & flood detection ────────────────────────────
 [arp]
 enabled = true
-poll_interval_secs = 5
+poll_interval_secs = 5         # How often to read /proc/net/arp
 
-# Gateway change detection — watches default route
+# ── Default gateway monitoring ─────────────────────────────
 [gateway]
 enabled = true
-poll_interval_secs = 10
+poll_interval_secs = 10        # How often to check /proc/net/route
 
-# DNS poisoning detection — cross-validates resolvers
+# ── DNS poisoning detection ────────────────────────────────
 [dns]
 enabled = true
-poll_interval_secs = 30
-trusted_resolvers = ["1.1.1.1", "8.8.8.8"]
-test_domains = ["example.com", "cloudflare.com", "google.com"]
+poll_interval_secs = 30        # How often to cross-validate DNS
+trusted_resolvers = [          # Resolvers to compare against
+    "1.1.1.1",                 #   Cloudflare
+    "8.8.8.8",                 #   Google
+]
+test_domains = [               # Domains to resolve
+    "example.com",
+    "cloudflare.com",
+    "google.com",
+]
 
-# Rogue DHCP server detection
+# ── Rogue DHCP server detection ────────────────────────────
 [dhcp]
 enabled = true
-listen_timeout_secs = 10
+listen_timeout_secs = 10       # Socket recv timeout per cycle
 
-# Firewall hardening via nftables
+# ── Firewall hardening (nftables) ──────────────────────────
 [hardener]
-enabled = false          # must opt-in
-auto_harden = false      # auto-activate on threat detection
-allowed_outbound_ports = [53, 80, 443, 853, 993, 587]
+enabled = false                # Must opt-in explicitly
+auto_harden = false            # Auto-activate on High+ threats
+allowed_outbound_ports = [     # Ports allowed when hardened
+    53,                        #   DNS
+    80,                        #   HTTP
+    443,                       #   HTTPS
+    853,                       #   DNS-over-TLS
+    993,                       #   IMAPS
+    587,                       #   SMTP submission
+]
 ```
+
+### Validation
+
+All config values are validated at load time:
+
+- Poll intervals must be > 0 (prevents busy-loop DoS)
+- DNS resolvers must be valid IPv4 or IPv6 addresses
+- Test domains must be non-empty and within RFC 1035 limits (253 chars, 63 per label)
+- Port numbers must not be 0
+- Interface name must be <= 15 characters (Linux `IFNAMSIZ`)
+
+---
 
 ## Architecture
 
 ```
-bulwark
-├── main.rs          CLI entry point, signal handling, daemon lifecycle
-├── error.rs         Central error types
-├── config.rs        TOML configuration with serde
-├── daemon.rs        Orchestrator: spawns detectors, processes threats
-├── alert.rs         Threat types, severity levels
-├── net_util.rs      MAC address type, /proc parsers, DNS packet builder
-├── hardener.rs      nftables rule generation and management
-└── detectors/
-    ├── arp.rs       ARP spoof + flood detection
-    ├── gateway.rs   Default gateway monitoring
-    ├── dns.rs       DNS cross-validation
-    └── dhcp.rs      Rogue DHCP server detection
+src/
+  main.rs              CLI (clap), logging (tracing), signal handling, daemon lifecycle
+  error.rs             Central Error enum with thiserror
+  config.rs            TOML config with serde, validation at load time
+  daemon.rs            Async orchestrator: spawns detectors, threat dedup, hardener dispatch
+  alert.rs             Severity, ThreatKind, Threat types
+  net_util.rs          MacAddr, /proc parsers, DNS packet codec
+  hardener.rs          nftables rule generation, activation, rollback
+  detectors/
+    mod.rs             Module structure, ThreatSender type alias
+    arp.rs             ARP spoof + flood detection
+    gateway.rs         Default gateway IP + MAC monitoring
+    dns.rs             Cross-resolver DNS validation
+    dhcp.rs            DHCP OFFER parsing, rogue server detection
 ```
 
-Each detector runs as an independent async task, sending `Threat` events through a tokio channel to the central daemon loop. The daemon logs threats and optionally triggers the firewall hardener.
+### Data flow
+
+```
+  /proc/net/arp ──> [ARP Detector]  ──┐
+  /proc/net/route ─> [GW Detector]  ──┤
+  /etc/resolv.conf ─> [DNS Detector] ─┤── mpsc::channel ──> [Daemon] ──> [Hardener] ──> nft
+  UDP :68 ─────────> [DHCP Detector] ─┘        │
+                                            [Dedup]
+                                                │
+                                          tracing/journald
+```
 
 ### Design principles
 
-- **Minimal dependencies** — small attack surface for a security tool
-- **No external C libraries** — pure Rust with `libc` for syscalls
-- **Zero configuration required** — sane defaults, auto-detects wireless interface
-- **Graceful lifecycle** — clean startup, SIGINT/SIGTERM handling, firewall rollback on shutdown
-- **Testable core logic** — detection algorithms are pure functions with comprehensive unit tests
+- **Minimal attack surface** — A security tool with a sprawling dependency tree is a liability. bulwark uses only essential, well-audited crates.
+- **No panics in production** — `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]` is enforced at compile time. All error paths return `Result`.
+- **Hardened parsers** — DNS, DHCP, ARP, and route parsers validate every byte: bounds checking, loop limits, checked arithmetic, and adversarial input rejection.
+- **Testable core logic** — Detection algorithms are pure functions that accept string/byte input and return threats. No filesystem or network access in test paths.
+- **Graceful lifecycle** — Clean startup, SIGINT/SIGTERM handling, firewall rollback on shutdown, threat summary on exit.
+- **Deduplication** — Identical threats are suppressed within a 60-second window to prevent log flooding.
 
-## What it doesn't do
-
-bulwark is a **detection and hardening** tool, not a full network security suite:
-
-- It won't encrypt your traffic — use a VPN or WireGuard for that
-- It won't prevent passive sniffing — open WiFi is unencrypted at L2
-- It won't detect attacks on other devices — it protects the machine it runs on
-- It won't replace a proper firewall — it adds temporary hardening rules on top of your existing setup
-
-**Best used alongside**: VPN/WireGuard, HTTPS-only browsing, DNS-over-TLS/HTTPS.
+---
 
 ## Testing
 
-```bash
-cargo test
-# running 53 tests ... test result: ok. 53 passed
+```
+$ cargo test
+
+running 155 tests
+...
+test result: ok. 155 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
-All detection logic is unit-tested with synthetic network data — ARP tables, route tables, DHCP packets, DNS responses.
+### Test coverage by module
+
+| Module | Tests | What's covered |
+|:---|:---:|:---|
+| `net_util` | 44 | MAC parsing, ARP table parsing, route parsing, DNS codec, adversarial packets, bounds overflow, label limits |
+| `config` | 22 | Defaults, TOML parsing, all validation rules, edge cases (zero intervals, invalid IPs, long names) |
+| `detectors/arp` | 12 | Baseline, spoof detection, flood detection, interface filtering, multi-spoof, revert, empty tables |
+| `detectors/dhcp` | 16 | DHCP OFFER parsing, truncated/malformed packets, padding, rogue detection, lease file parsing |
+| `detectors/dns` | 12 | resolv.conf parsing, query construction, poisoning logic, CDN overlap, IPv6, malformed domains |
+| `detectors/gateway` | 9 | Baseline, IP change, MAC change, simultaneous changes, route disappearance, empty tables |
+| `daemon` | 9 | Threat dedup (first emit, suppression, window expiry, eviction), wireless detection, no-detector mode |
+| `hardener` | 12 | Rule generation (ports, DHCP, loopback, ICMPv6, logging), auto-harden thresholds, deactivation |
+| `alert` | 7 | Display for all severity/threat variants, ordering, timestamps, equality |
+
+All detection logic is tested with **synthetic adversarial data** — crafted ARP tables, malformed DNS packets with overflow attempts, truncated DHCP packets, and garbage binary input.
+
+---
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy.
+
+### Hardening measures in the codebase
+
+- **Compile-time lint enforcement** — `deny(clippy::unwrap_used)`, `deny(clippy::expect_used)`, `deny(clippy::panic)` prevent any production code path from panicking.
+- **Checked arithmetic** — All DNS parser offset calculations use `checked_add()` to prevent integer overflow.
+- **Loop limits** — DNS name traversal is limited to 128 labels; section counts capped at 64. Prevents DoS from crafted packets.
+- **Input validation** — Config validated at load. Parsers reject malformed data gracefully (return `None`/`Err`, never panic).
+- **Minimal unsafe** — Only two `unsafe` blocks, both documented with `SAFETY` comments: `geteuid()` (trivial syscall) and `setsockopt()` (socket binding with validated buffer).
+- **Threat deduplication** — Bounded memory (max 1024 tracked keys with auto-eviction) prevents memory exhaustion from sustained attacks.
+
+---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE) &copy; Raphael Lugmayr
+
+---
+
+<p align="center">
+  <sub>Built with Rust. Designed for hostile networks.</sub>
+</p>
