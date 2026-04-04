@@ -18,7 +18,7 @@
   <img alt="Language" src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"/>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Linux-lightgrey?style=flat-square"/>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-155%20passing-brightgreen?style=flat-square"/>
+  <img alt="Tests" src="https://img.shields.io/badge/tests-177%20passing-brightgreen?style=flat-square"/>
 </p>
 
 ---
@@ -122,6 +122,65 @@ Rules are applied via `nft -f -` (stdin) and managed under a dedicated `inet bul
 ### Threat Deduplication
 
 bulwark deduplicates repeated identical alerts within a 60-second window to prevent log flooding. A persistent ARP spoof fires once, not every 5-second poll cycle. Counters are logged at shutdown so you know exactly how many events were suppressed.
+
+---
+
+## Active Protections
+
+Beyond detection, bulwark can **actively harden** your network stack. All protections are opt-in and require root.
+
+### ARP Gateway Pinning
+
+Sets the gateway's ARP entry to `PERMANENT` state, making the kernel ignore ARP replies that try to change the gateway's MAC. This is the single most effective countermeasure against ARP cache poisoning — it prevents the attack entirely, not just detects it.
+
+```toml
+[protect]
+arp_pin = true
+```
+
+### Client Isolation
+
+Adds nftables rules that block all LAN subnet traffic **except** to/from the default gateway. Prevents port scanning, service exploitation, LLMNR poisoning, and all lateral movement from other clients on the same network.
+
+```toml
+[protect]
+client_isolation = true
+```
+
+### DNS-over-TLS Encryption
+
+Runs a lightweight local DNS proxy that encrypts all queries via TLS (port 853) to trusted resolvers. An nftables DNAT rule transparently redirects all outgoing DNS to the local proxy, making DNS poisoning impossible at the network level.
+
+```toml
+[protect]
+dns_encrypt = true
+dns_resolvers = ["1.1.1.1:853", "8.8.8.8:853"]
+```
+
+### MAC Address Randomization
+
+Generates a random locally-administered MAC address on startup. Prevents tracking across networks and sessions. The original MAC is saved and restored on shutdown.
+
+```toml
+[protect]
+mac_randomize = true
+```
+
+### Full protection mode
+
+Enable everything for maximum security on untrusted networks:
+
+```toml
+[protect]
+arp_pin = true
+client_isolation = true
+dns_encrypt = true
+mac_randomize = true
+
+[hardener]
+enabled = true
+auto_harden = true
+```
 
 ---
 
@@ -240,6 +299,17 @@ allowed_outbound_ports = [     # Ports allowed when hardened
     993,                       #   IMAPS
     587,                       #   SMTP submission
 ]
+
+# ── Active protections ─────────────────────────────────────
+[protect]
+arp_pin = false                # Pin gateway MAC as static ARP entry
+client_isolation = false       # Block LAN traffic except gateway
+dns_encrypt = false            # Encrypt DNS via TLS (port 853)
+dns_resolvers = [              # DoT resolvers
+    "1.1.1.1:853",
+    "8.8.8.8:853",
+]
+mac_randomize = false          # Randomize MAC on startup
 ```
 
 ### Validation
@@ -271,18 +341,35 @@ src/
     gateway.rs         Default gateway IP + MAC monitoring
     dns.rs             Cross-resolver DNS validation
     dhcp.rs            DHCP OFFER parsing, rogue server detection
+  protect/
+    mod.rs             Active protection module structure
+    arp_pin.rs         Static ARP gateway pinning (prevents ARP spoof)
+    dns_crypt.rs       DNS-over-TLS proxy (encrypts DNS queries)
+    isolation.rs       Client isolation via nftables (blocks LAN traffic)
+    mac_rand.rs        MAC address randomization (prevents tracking)
 ```
 
 ### Data flow
 
 ```
-  /proc/net/arp ──> [ARP Detector]  ──┐
-  /proc/net/route ─> [GW Detector]  ──┤
-  /etc/resolv.conf ─> [DNS Detector] ─┤── mpsc::channel ──> [Daemon] ──> [Hardener] ──> nft
-  UDP :68 ─────────> [DHCP Detector] ─┘        │
-                                            [Dedup]
-                                                │
-                                          tracing/journald
+  ┌─────────────────────── DETECTION ───────────────────────┐
+  │                                                         │
+  │ /proc/net/arp ──> [ARP Detector]  ──┐                   │
+  │ /proc/net/route ─> [GW Detector]  ──┤                   │
+  │ /etc/resolv.conf ─> [DNS Detector] ─┤── mpsc ──> [Daemon] ──> [Hardener] ──> nft
+  │ UDP :68 ─────────> [DHCP Detector] ─┘      │     │     │
+  │                                         [Dedup]   │     │
+  │                                             │     │     │
+  │                                       tracing     │     │
+  └───────────────────────────────────────────────────┘     │
+                                                            │
+  ┌─────────────────── PROTECTION ─────────────────────┐    │
+  │                                                    │    │
+  │ [ARP Pin] ──────> ip neigh permanent               │    │
+  │ [Client Isolation] ──> nft (block LAN)             │    │
+  │ [DNS Encrypt] ──> TLS proxy + nft DNAT             │    │
+  │ [MAC Randomize] ──> ip link set address            │    │
+  └────────────────────────────────────────────────────┘
 ```
 
 ### Design principles
@@ -301,7 +388,7 @@ src/
 ```
 $ cargo test
 
-running 155 tests
+running 177 tests
 ...
 test result: ok. 155 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
@@ -319,6 +406,10 @@ test result: ok. 155 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 | `daemon` | 9 | Threat dedup (first emit, suppression, window expiry, eviction), wireless detection, no-detector mode |
 | `hardener` | 12 | Rule generation (ports, DHCP, loopback, ICMPv6, logging), auto-harden thresholds, deactivation |
 | `alert` | 7 | Display for all severity/threat variants, ordering, timestamps, equality |
+| `protect/arp_pin` | 3 | Initial state, deactivation, gateway discovery |
+| `protect/dns_crypt` | 6 | TLS config, redirect rules, loopback exception, initial state |
+| `protect/isolation` | 8 | Rule generation, gateway/subnet, DHCP broadcast, various subnets |
+| `protect/mac_rand` | 5 | MAC format, locally-administered bit, uniqueness, lifecycle |
 
 All detection logic is tested with **synthetic adversarial data** — crafted ARP tables, malformed DNS packets with overflow attempts, truncated DHCP packets, and garbage binary input.
 
