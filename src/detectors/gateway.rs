@@ -233,4 +233,61 @@ wlan0\t0001A8C0\t00000000\t0001\t0\t0\t600\tFFFFFF00\t0\t0\t0";
         assert!(threats.is_empty());
         assert!(det.state.is_none());
     }
+
+    #[test]
+    fn test_gateway_mac_becomes_available() {
+        let mut det = make_detector();
+        // First scan: no ARP entry for gateway yet
+        let empty_arp = "\
+IP address       HW type     Flags       HW address            Mask     Device";
+        let threats = det.analyze(ROUTE, empty_arp);
+        assert!(threats.is_empty());
+        assert!(det.state.as_ref().unwrap().mac.is_none());
+
+        // Second scan: ARP entry appears — should NOT be a threat
+        // (MAC going from None to Some is not a change)
+        let threats = det.analyze(ROUTE, ARP);
+        assert!(threats.is_empty());
+    }
+
+    #[test]
+    fn test_empty_route_table() {
+        let mut det = make_detector();
+        let threats = det.analyze("", "");
+        assert!(threats.is_empty());
+        assert!(det.state.is_none());
+    }
+
+    #[test]
+    fn test_gateway_ip_and_mac_change_simultaneously() {
+        let mut det = make_detector();
+        det.analyze(ROUTE, ARP);
+
+        // Both IP and MAC change — should report IP change (not MAC change,
+        // since MAC comparison only triggers for same-IP gateway)
+        let new_route = "\
+Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT
+wlan0\t00000000\t0201A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0";
+        let new_arp = "\
+IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.2      0x1         0x2         ff:ee:dd:cc:bb:aa     *        wlan0";
+
+        let threats = det.analyze(new_route, new_arp);
+        assert_eq!(threats.len(), 1);
+        assert!(matches!(threats[0].kind, ThreatKind::GatewayIpChanged { .. }));
+    }
+
+    #[test]
+    fn test_route_disappears_then_reappears() {
+        let mut det = make_detector();
+        det.analyze(ROUTE, ARP); // baseline
+
+        // Route disappears
+        let threats = det.analyze("", ARP);
+        assert!(threats.is_empty());
+
+        // Route reappears with same gateway — no threat
+        let threats = det.analyze(ROUTE, ARP);
+        assert!(threats.is_empty());
+    }
 }
