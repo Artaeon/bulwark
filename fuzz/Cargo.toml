@@ -1,0 +1,32 @@
+[package]
+name = "bulwark-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bulwark = { path = ".." }
+
+[[bin]]
+name = "fuzz_dns_parser"
+path = "fuzz_targets/fuzz_dns_parser.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_dhcp_parser"
+path = "fuzz_targets/fuzz_dhcp_parser.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_arp_parser"
+path = "fuzz_targets/fuzz_arp_parser.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_dns_query"
+path = "fuzz_targets/fuzz_dns_query.rs"
+doc = false
