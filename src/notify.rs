@@ -117,4 +117,88 @@ mod tests {
         );
         notify_threat(&threat);
     }
+
+    // === Coverage for every ThreatKind variant ===
+
+    #[test]
+    fn test_notify_arp_flood_high() {
+        let threat = Threat::new(
+            ThreatKind::ArpFlood {
+                new_entries: 50,
+                window_secs: 5,
+            },
+            Severity::High,
+            "arp",
+        );
+        notify_threat(&threat);
+    }
+
+    #[test]
+    fn test_notify_gateway_ip_changed_high() {
+        let threat = Threat::new(
+            ThreatKind::GatewayIpChanged {
+                old_ip: Ipv4Addr::new(192, 168, 1, 1),
+                new_ip: Ipv4Addr::new(10, 0, 0, 1),
+            },
+            Severity::High,
+            "gateway",
+        );
+        notify_threat(&threat);
+    }
+
+    #[test]
+    fn test_notify_rogue_dhcp_critical() {
+        let threat = Threat::new(
+            ThreatKind::RogueDhcpServer {
+                expected_server: Ipv4Addr::new(192, 168, 1, 1),
+                rogue_server: Ipv4Addr::new(192, 168, 1, 99),
+            },
+            Severity::Critical,
+            "dhcp",
+        );
+        notify_threat(&threat);
+    }
+
+    #[test]
+    fn test_notify_dns_poisoning_high() {
+        let threat = Threat::new(
+            ThreatKind::DnsPoisoning {
+                domain: "example.com".to_string(),
+                system_results: vec![Ipv4Addr::new(1, 2, 3, 4)],
+                trusted_results: vec![Ipv4Addr::new(5, 6, 7, 8)],
+            },
+            Severity::High,
+            "dns",
+        );
+        notify_threat(&threat);
+    }
+
+    #[test]
+    fn test_notify_bssid_changed_high() {
+        let threat = Threat::new(
+            ThreatKind::BssidChanged {
+                ssid: "CafeWiFi".to_string(),
+                old_bssid: "aa:bb:cc:dd:ee:ff".to_string(),
+                new_bssid: "de:ad:be:ef:00:01".to_string(),
+            },
+            Severity::High,
+            "bssid",
+        );
+        notify_threat(&threat);
+    }
+
+    #[test]
+    fn test_notify_unicode_in_ssid_does_not_panic() {
+        // Notification bodies may contain arbitrary Unicode (SSIDs)
+        let threat = Threat::new(
+            ThreatKind::BssidChanged {
+                ssid: "café ☕ 🛡️".to_string(),
+                old_bssid: "aa:aa:aa:aa:aa:aa".to_string(),
+                new_bssid: "bb:bb:bb:bb:bb:bb".to_string(),
+            },
+            Severity::High,
+            "bssid",
+        );
+        notify_threat(&threat);
+    }
 }
