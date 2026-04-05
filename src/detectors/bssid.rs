@@ -22,9 +22,9 @@ const DETECTOR_NAME: &str = "bssid";
 
 /// Tracked BSSID state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BssidState {
-    bssid: String,
-    ssid: String,
+pub struct BssidState {
+    pub bssid: String,
+    pub ssid: String,
 }
 
 /// Detects BSSID changes that may indicate an evil twin attack.

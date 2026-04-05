@@ -224,8 +224,10 @@ async fn try_resolver(
     .map_err(|_| crate::Error::Network(format!("TLS handshake with {} timed out", resolver)))?
     .map_err(|e| crate::Error::Network(format!("TLS handshake failed: {}", e)))?;
 
-    // DNS-over-TLS uses TCP framing: 2-byte length prefix
-    let len = query.len() as u16;
+    // DNS-over-TLS uses TCP framing: 2-byte length prefix.
+    // DNS messages are limited to 65535 bytes by the protocol; reject oversized queries.
+    let len = u16::try_from(query.len())
+        .map_err(|_| crate::Error::Network(format!("DNS query too large: {} bytes", query.len())))?;
     tls.write_all(&len.to_be_bytes())
         .await
         .map_err(crate::Error::Io)?;

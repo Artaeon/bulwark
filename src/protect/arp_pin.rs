@@ -24,8 +24,13 @@ pub struct ArpPin {
 #[derive(Debug, Clone)]
 struct PinnedGateway {
     ip: Ipv4Addr,
-    mac: MacAddr,
     interface: String,
+}
+
+impl Default for ArpPin {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArpPin {
@@ -72,9 +77,9 @@ impl ArpPin {
             "gateway ARP entry pinned as permanent"
         );
 
+        let _ = gw_mac; // already logged above; PinnedGateway only needs ip + interface for removal
         self.pinned = Some(PinnedGateway {
             ip: gw_ip,
-            mac: gw_mac,
             interface: iface,
         });
 

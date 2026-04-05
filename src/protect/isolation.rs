@@ -26,6 +26,12 @@ pub struct ClientIsolation {
     active: bool,
 }
 
+impl Default for ClientIsolation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClientIsolation {
     pub fn new() -> Self {
         Self { active: false }
@@ -187,9 +193,10 @@ fn parse_interface_subnet(content: &str, interface: &str) -> Option<(Ipv4Addr, u
         let mask = u32::from_str_radix(fields[7], 16).ok()?;
 
         let dest_ip = Ipv4Addr::from(dest.to_be());
-        let prefix_len = mask.count_ones() as u8;
+        // count_ones on a u32 returns 0..=32, always fits in u8
+        let prefix_len = u8::try_from(mask.count_ones()).ok()?;
 
-        if prefix_len >= 8 && prefix_len <= 30 {
+        if (8..=30).contains(&prefix_len) {
             return Some((dest_ip, prefix_len));
         }
     }
