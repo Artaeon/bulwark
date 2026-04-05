@@ -68,6 +68,11 @@ pub enum ThreatKind {
         system_results: Vec<Ipv4Addr>,
         trusted_results: Vec<Ipv4Addr>,
     },
+    BssidChanged {
+        ssid: String,
+        old_bssid: String,
+        new_bssid: String,
+    },
 }
 
 impl fmt::Display for ThreatKind {
@@ -101,6 +106,13 @@ impl fmt::Display for ThreatKind {
                     f,
                     "DNS poisoning for {}: system={:?}, trusted={:?}",
                     domain, system_results, trusted_results
+                )
+            }
+            ThreatKind::BssidChanged { ssid, old_bssid, new_bssid } => {
+                write!(
+                    f,
+                    "BSSID changed on '{}': {} -> {} (possible evil twin)",
+                    ssid, old_bssid, new_bssid
                 )
             }
         }

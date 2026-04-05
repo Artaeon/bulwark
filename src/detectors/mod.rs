@@ -13,6 +13,7 @@
 //! - [`dhcp`] — Rogue DHCP server detection via DHCP OFFER monitoring
 
 pub mod arp;
+pub mod bssid;
 pub mod dhcp;
 pub mod dns;
 pub mod gateway;
