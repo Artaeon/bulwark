@@ -36,6 +36,27 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
+    // Install a panic hook that logs the panic via tracing before aborting.
+    // panic = "abort" in Cargo.toml guarantees the process dies after this.
+    // Even though our strict clippy lints prevent explicit panics in our code,
+    // a panic could still theoretically come from a dependency or an unexpected
+    // arithmetic overflow. This hook ensures it's visible in journald rather
+    // than silently lost.
+    std::panic::set_hook(Box::new(|info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("<non-string panic payload>");
+        eprintln!("FATAL PANIC at {}: {}", location, payload);
+        tracing::error!(location = %location, payload = %payload, "FATAL PANIC");
+    }));
+
     let cli = Cli::parse();
 
     // Load config (use defaults if file doesn't exist and not explicitly specified)
