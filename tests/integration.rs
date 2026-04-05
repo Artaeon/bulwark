@@ -104,7 +104,11 @@ fn parsers_handle_garbage_gracefully() {
 /// MAC address roundtrip: parse -> display -> parse yields same value.
 #[test]
 fn mac_addr_roundtrip_through_display() {
-    let inputs = ["aa:bb:cc:dd:ee:ff", "00:11:22:33:44:55", "ff:ff:ff:ff:ff:ff"];
+    let inputs = [
+        "aa:bb:cc:dd:ee:ff",
+        "00:11:22:33:44:55",
+        "ff:ff:ff:ff:ff:ff",
+    ];
     for s in inputs {
         let mac: MacAddr = s.parse().expect("valid");
         assert_eq!(format!("{}", mac), s);
