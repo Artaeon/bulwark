@@ -58,7 +58,17 @@ impl ArpPin {
         let ip_str = format!("{}", gw_ip);
 
         let output = Command::new("ip")
-            .args(["neigh", "replace", &ip_str, "lladdr", &mac_str, "nud", "permanent", "dev", &iface])
+            .args([
+                "neigh",
+                "replace",
+                &ip_str,
+                "lladdr",
+                &mac_str,
+                "nud",
+                "permanent",
+                "dev",
+                &iface,
+            ])
             .output()
             .map_err(|e| crate::Error::Network(format!("failed to run ip neigh: {}", e)))?;
 
@@ -77,7 +87,8 @@ impl ArpPin {
             "gateway ARP entry pinned as permanent"
         );
 
-        let _ = gw_mac; // already logged above; PinnedGateway only needs ip + interface for removal
+        // PinnedGateway only needs ip + interface to remove the pin later;
+        // the MAC was used to create the pin and has already been logged.
         self.pinned = Some(PinnedGateway {
             ip: gw_ip,
             interface: iface,
@@ -126,11 +137,13 @@ fn discover_gateway() -> Result<(Ipv4Addr, MacAddr, String), crate::Error> {
         .map_err(|e| crate::Error::Network(format!("failed to read /proc/net/arp: {}", e)))?;
 
     let arp_entries = net_util::parse_arp_table(&arp_content);
-    let gw_mac = net_util::resolve_mac_from_arp(&arp_entries, route.gateway_ip)
-        .ok_or_else(|| crate::Error::Network(format!(
-            "gateway {} not found in ARP table (try pinging it first)",
-            route.gateway_ip
-        )))?;
+    let gw_mac =
+        net_util::resolve_mac_from_arp(&arp_entries, route.gateway_ip).ok_or_else(|| {
+            crate::Error::Network(format!(
+                "gateway {} not found in ARP table (try pinging it first)",
+                route.gateway_ip
+            ))
+        })?;
 
     Ok((route.gateway_ip, gw_mac, route.interface))
 }
