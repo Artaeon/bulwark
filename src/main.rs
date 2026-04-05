@@ -1,28 +1,11 @@
-// Strict lints for a security tool — catch footguns at compile time.
-#![deny(clippy::unwrap_used)]
-#![deny(clippy::expect_used)]
-#![deny(clippy::panic)]
-#![deny(arithmetic_overflow)]
-#![warn(clippy::cast_possible_truncation)]
-#![warn(clippy::cast_sign_loss)]
-
-mod alert;
-mod config;
-mod daemon;
-mod detectors;
-mod error;
-mod hardener;
-mod net_util;
-mod protect;
-
-pub use error::Error;
-
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Parser;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
+
+use bulwark::{config, daemon, hardener};
 
 /// bulwark — network security daemon for open/untrusted wireless networks
 ///
@@ -95,63 +78,16 @@ fn main() -> ExitCode {
                 &config.interface
             }
         );
-        println!(
-            "  ARP detector: {}",
-            if config.arp.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            }
-        );
-        println!(
-            "  Gateway detector: {}",
-            if config.gateway.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            }
-        );
-        println!(
-            "  DNS detector: {}",
-            if config.dns.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            }
-        );
-        println!(
-            "  DHCP detector: {}",
-            if config.dhcp.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            }
-        );
-        println!(
-            "  Hardener: {}",
-            if config.hardener.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            }
-        );
+        println!("  ARP detector: {}", if config.arp.enabled { "enabled" } else { "disabled" });
+        println!("  Gateway detector: {}", if config.gateway.enabled { "enabled" } else { "disabled" });
+        println!("  DNS detector: {}", if config.dns.enabled { "enabled" } else { "disabled" });
+        println!("  DHCP detector: {}", if config.dhcp.enabled { "enabled" } else { "disabled" });
+        println!("  Hardener: {}", if config.hardener.enabled { "enabled" } else { "disabled" });
         println!("  Protections:");
-        println!(
-            "    ARP pinning: {}",
-            if config.protect.arp_pin { "enabled" } else { "disabled" }
-        );
-        println!(
-            "    Client isolation: {}",
-            if config.protect.client_isolation { "enabled" } else { "disabled" }
-        );
-        println!(
-            "    DNS encryption: {}",
-            if config.protect.dns_encrypt { "enabled" } else { "disabled" }
-        );
-        println!(
-            "    MAC randomization: {}",
-            if config.protect.mac_randomize { "enabled" } else { "disabled" }
-        );
+        println!("    ARP pinning: {}", if config.protect.arp_pin { "enabled" } else { "disabled" });
+        println!("    Client isolation: {}", if config.protect.client_isolation { "enabled" } else { "disabled" });
+        println!("    DNS encryption: {}", if config.protect.dns_encrypt { "enabled" } else { "disabled" });
+        println!("    MAC randomization: {}", if config.protect.mac_randomize { "enabled" } else { "disabled" });
         return ExitCode::SUCCESS;
     }
 
