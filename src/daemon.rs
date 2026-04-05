@@ -18,10 +18,12 @@ use tracing::{error, info, warn};
 use crate::alert::Threat;
 use crate::config::Config;
 use crate::detectors::arp::ArpDetector;
+use crate::detectors::bssid::BssidDetector;
 use crate::detectors::dhcp::DhcpDetector;
 use crate::detectors::dns::DnsDetector;
 use crate::detectors::gateway::GatewayDetector;
 use crate::hardener::Hardener;
+use crate::notify;
 use crate::protect::arp_pin::ArpPin;
 use crate::protect::dns_crypt::{DnsCrypt, DnsCryptConfig};
 use crate::protect::isolation::ClientIsolation;
@@ -159,6 +161,21 @@ impl Daemon {
             }));
         }
 
+        if self.config.bssid.enabled {
+            let iface = if interface.is_empty() {
+                "wlan0".to_string()
+            } else {
+                interface.clone()
+            };
+            let detector = BssidDetector::new(self.config.bssid.clone(), iface);
+            let tx = tx.clone();
+            task_handles.push(tokio::spawn(async move {
+                if let Err(e) = detector.run(tx).await {
+                    error!(detector = "bssid", error = %e, "detector failed");
+                }
+            }));
+        }
+
         // Drop our copy of the sender so the channel closes when all detectors stop
         drop(tx);
 
@@ -248,6 +265,17 @@ impl Daemon {
         let mut total_threats: u64 = 0;
         let mut suppressed_threats: u64 = 0;
 
+        // Captive portal grace period — suppress alerts for the first N seconds
+        let grace_deadline = if self.config.startup_grace_secs > 0 {
+            info!(
+                grace_secs = self.config.startup_grace_secs,
+                "captive portal grace period active — alerts suppressed"
+            );
+            Some(Instant::now() + std::time::Duration::from_secs(self.config.startup_grace_secs))
+        } else {
+            None
+        };
+
         // Main event loop: process threats from detectors
         loop {
             tokio::select! {
@@ -261,6 +289,17 @@ impl Daemon {
                                 suppressed_threats += 1;
                                 continue;
                             }
+
+                            // Captive portal grace period: suppress alerts during startup window
+                            if let Some(deadline) = grace_deadline {
+                                if Instant::now() < deadline {
+                                    suppressed_threats += 1;
+                                    continue;
+                                }
+                            }
+
+                            // Desktop notification for High+ threats (best-effort, non-blocking)
+                            notify::notify_threat(&threat);
 
                             // Log to tracing (which goes to journald/stderr)
                             match threat.severity {
@@ -410,6 +449,7 @@ mod tests {
         config.gateway.enabled = false;
         config.dns.enabled = false;
         config.dhcp.enabled = false;
+        config.bssid.enabled = false;
 
         let daemon = Daemon::new(config);
         let (shutdown_tx, _shutdown_rx) = tokio::sync::broadcast::channel(1);

@@ -23,8 +23,13 @@ pub struct Config {
     pub gateway: GatewayConfig,
     pub dns: DnsConfig,
     pub dhcp: DhcpConfig,
+    pub bssid: BssidConfig,
     pub hardener: HardenerConfig,
     pub protect: ProtectConfig,
+    /// Grace period in seconds after startup before alerting.
+    /// Useful on captive portal networks where initial DNS/gateway
+    /// state may be redirected until portal authentication completes.
+    pub startup_grace_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -55,6 +60,13 @@ pub struct DnsConfig {
 pub struct DhcpConfig {
     pub enabled: bool,
     pub listen_timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct BssidConfig {
+    pub enabled: bool,
+    pub poll_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -105,8 +117,10 @@ impl Default for Config {
             gateway: GatewayConfig::default(),
             dns: DnsConfig::default(),
             dhcp: DhcpConfig::default(),
+            bssid: BssidConfig::default(),
             hardener: HardenerConfig::default(),
             protect: ProtectConfig::default(),
+            startup_grace_secs: 0,
         }
     }
 }
@@ -149,6 +163,15 @@ impl Default for DhcpConfig {
         Self {
             enabled: true,
             listen_timeout_secs: 10,
+        }
+    }
+}
+
+impl Default for BssidConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            poll_interval_secs: 10,
         }
     }
 }
