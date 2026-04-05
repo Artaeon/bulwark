@@ -8,6 +8,13 @@ interface = ""
 # Log level: trace, debug, info, warn, error
 log_level = "info"
 
+# Captive portal grace period (seconds).
+# Suppress all alerts for the first N seconds after startup. Useful on
+# networks with captive portals (hotels, airports) where initial DNS and
+# gateway state is redirected until portal authentication completes.
+# Set to 0 to disable (default).
+startup_grace_secs = 0
+
 # ARP spoof detection
 # Monitors the ARP table for MAC address changes on known IPs.
 # A MAC change for the same IP strongly indicates ARP spoofing (MitM attack).
@@ -38,6 +45,13 @@ test_domains = ["example.com", "cloudflare.com", "google.com"]
 [dhcp]
 enabled = true
 listen_timeout_secs = 10
+
+# BSSID change detection (evil twin)
+# Tracks the access point's BSSID via 'iw dev <iface> link'.
+# BSSID change on the same SSID = likely evil twin attack.
+[bssid]
+enabled = true
+poll_interval_secs = 10
 
 # Firewall hardening (nftables)
 # When enabled, can automatically harden the firewall on threat detection.
