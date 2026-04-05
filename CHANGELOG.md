@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Subprocess timeout helper (`src/subprocess.rs`) applied to the hardener
+  activation path, so a hung `nft` cannot stall the threat response.
+- Panic hook in `main` that logs panic location and payload via `tracing`
+  before the process aborts.
+- 8 regression tests documenting historical bugs in `tests/regression.rs`.
+- 10 extended config and parser tests in `tests/config_and_parsers.rs`.
+- 3 subprocess timeout tests (fast exit, timeout kill, non-zero exit).
+
+### Changed
+- Test count: 196 → 217.
+
 ## [0.1.0] — Initial release
 
 ### Detection (6 detectors)
