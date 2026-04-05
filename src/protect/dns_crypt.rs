@@ -38,10 +38,7 @@ pub struct DnsCryptConfig {
 impl Default for DnsCryptConfig {
     fn default() -> Self {
         Self {
-            resolvers: vec![
-                "1.1.1.1:853".to_string(),
-                "8.8.8.8:853".to_string(),
-            ],
+            resolvers: vec!["1.1.1.1:853".to_string(), "8.8.8.8:853".to_string()],
         }
     }
 }
@@ -99,16 +96,30 @@ impl DnsCrypt {
         Ok(())
     }
 
-    /// Run the DNS-over-TLS proxy loop.
+    /// Bind the DNS proxy's listening socket.
     ///
-    /// This listens for UDP DNS queries on 127.0.0.1:5353, forwards them
-    /// over TLS to configured resolvers, and sends the response back.
-    pub async fn run_proxy(&self, mut shutdown: broadcast::Receiver<()>) -> Result<(), crate::Error> {
+    /// Separated from [`Self::serve`] so that binding failures (e.g., port
+    /// already in use) can be detected BEFORE installing the nftables
+    /// redirect — otherwise DNS would be broken on the host.
+    pub async fn bind() -> Result<Arc<UdpSocket>, crate::Error> {
         let socket = UdpSocket::bind(LISTEN_ADDR)
             .await
             .map_err(crate::Error::Io)?;
+        info!(listen = LISTEN_ADDR, "DNS-over-TLS proxy bound");
+        Ok(Arc::new(socket))
+    }
 
-        info!(listen = LISTEN_ADDR, "DNS-over-TLS proxy started");
+    /// Serve DNS queries on a pre-bound socket.
+    ///
+    /// Forwards UDP DNS queries over TLS to configured resolvers and sends
+    /// responses back from the same socket the query was received on
+    /// (clients reject responses from a different address).
+    pub async fn serve(
+        &self,
+        socket: Arc<UdpSocket>,
+        mut shutdown: broadcast::Receiver<()>,
+    ) -> Result<(), crate::Error> {
+        info!("DNS-over-TLS proxy started");
 
         let tls_config = build_tls_config()?;
         let connector = tokio_rustls::TlsConnector::from(tls_config);
@@ -124,22 +135,15 @@ impl DnsCrypt {
                             let query = buf[..len].to_vec();
                             let connector = connector.clone();
                             let resolvers = resolvers.clone();
-                            let socket_clone = socket.local_addr().ok();
+                            let reply_sock = Arc::clone(&socket);
 
-                            // Spawn handler task for this query
-                            let send_socket = match UdpSocket::bind("0.0.0.0:0").await {
-                                Ok(s) => Arc::new(s),
-                                Err(e) => {
-                                    debug!(error = %e, "failed to bind response socket");
-                                    continue;
-                                }
-                            };
-
-                            let send_sock = send_socket.clone();
+                            // Spawn handler task for this query. The reply is sent
+                            // from the same socket that received the query — DNS
+                            // clients reject responses from a different source.
                             tokio::spawn(async move {
                                 match forward_query_tls(&connector, &resolvers, &query).await {
                                     Ok(response) => {
-                                        if let Err(e) = send_sock.send_to(&response, src).await {
+                                        if let Err(e) = reply_sock.send_to(&response, src).await {
                                             debug!(error = %e, "failed to send DNS response");
                                         }
                                     }
@@ -152,8 +156,6 @@ impl DnsCrypt {
                                     }
                                 }
                             });
-
-                            let _ = socket_clone; // suppress unused
                         }
                         Err(e) => {
                             debug!(error = %e, "DNS proxy recv error");
@@ -199,9 +201,9 @@ async fn try_resolver(
     resolver: &str,
     query: &[u8],
 ) -> Result<Vec<u8>, crate::Error> {
-    let addr: SocketAddr = resolver
-        .parse()
-        .map_err(|e| crate::Error::Network(format!("invalid resolver address {}: {}", resolver, e)))?;
+    let addr: SocketAddr = resolver.parse().map_err(|e| {
+        crate::Error::Network(format!("invalid resolver address {}: {}", resolver, e))
+    })?;
 
     // Extract hostname for SNI (just the IP for now)
     let host = addr.ip().to_string();
@@ -226,14 +228,13 @@ async fn try_resolver(
 
     // DNS-over-TLS uses TCP framing: 2-byte length prefix.
     // DNS messages are limited to 65535 bytes by the protocol; reject oversized queries.
-    let len = u16::try_from(query.len())
-        .map_err(|_| crate::Error::Network(format!("DNS query too large: {} bytes", query.len())))?;
+    let len = u16::try_from(query.len()).map_err(|_| {
+        crate::Error::Network(format!("DNS query too large: {} bytes", query.len()))
+    })?;
     tls.write_all(&len.to_be_bytes())
         .await
         .map_err(crate::Error::Io)?;
-    tls.write_all(query)
-        .await
-        .map_err(crate::Error::Io)?;
+    tls.write_all(query).await.map_err(crate::Error::Io)?;
     tls.flush().await.map_err(crate::Error::Io)?;
 
     // Read response length
@@ -320,7 +321,8 @@ fn apply_nft_rules(ruleset: &str) -> Result<(), crate::Error> {
         .spawn()
         .and_then(|mut child| {
             use std::io::Write;
-            if let Some(ref mut stdin) = child.stdin {
+            // Take() so stdin drops (EOF) before wait_with_output, else deadlock.
+            if let Some(mut stdin) = child.stdin.take() {
                 stdin.write_all(ruleset.as_bytes())?;
             }
             child.wait_with_output()

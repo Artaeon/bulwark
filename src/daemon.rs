@@ -4,9 +4,9 @@
 //!
 //! 1. Auto-detects the wireless interface (or uses the configured one)
 //! 2. Spawns enabled detectors as independent tokio tasks
-//! 3. Receives [`Threat`](crate::alert::Threat) events through an `mpsc` channel
+//! 3. Receives [`Threat`] events through an `mpsc` channel
 //! 4. Deduplicates repeated alerts to prevent log flooding
-//! 5. Dispatches threats to the [`Hardener`](crate::hardener::Hardener) for auto-response
+//! 5. Dispatches threats to the [`Hardener`] for auto-response
 //! 6. Handles graceful shutdown with firewall rollback
 
 use std::collections::HashMap;
@@ -90,7 +90,10 @@ impl Daemon {
     }
 
     /// Run the daemon: spawn detectors and process threats.
-    pub async fn run(self, shutdown_tx: tokio::sync::broadcast::Sender<()>) -> Result<(), crate::Error> {
+    pub async fn run(
+        self,
+        shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    ) -> Result<(), crate::Error> {
         let mut shutdown = shutdown_tx.subscribe();
         let (tx, mut rx) = mpsc::channel::<Threat>(CHANNEL_CAPACITY);
 
@@ -187,7 +190,11 @@ impl Daemon {
         };
 
         // === Activate protections ===
-        let protect_iface = if interface.is_empty() { "wlan0".to_string() } else { interface.clone() };
+        let protect_iface = if interface.is_empty() {
+            "wlan0".to_string()
+        } else {
+            interface.clone()
+        };
 
         // MAC randomization (must be first — changes the interface MAC before other setup)
         let mut mac_randomizer = if self.config.protect.mac_randomize {
@@ -223,23 +230,39 @@ impl Daemon {
         };
 
         // DNS-over-TLS proxy
+        //
+        // Order matters: bind the local listening socket FIRST. Only if the bind
+        // succeeds do we install the nftables redirect — otherwise a bind failure
+        // (e.g., port already in use) would leave the system with DNS pointing at
+        // a non-listening socket.
         let mut dns_crypt = if self.config.protect.dns_encrypt {
             let config = DnsCryptConfig {
                 resolvers: self.config.protect.dns_resolvers.clone(),
             };
-            let mut dc = DnsCrypt::new(config.clone());
-            if let Err(e) = dc.activate_redirect() {
-                warn!(error = %e, "DNS encryption redirect failed (need root + nft)");
-            }
-            // Spawn the proxy task
-            let proxy_shutdown = shutdown_tx.subscribe();
-            let dc_proxy = DnsCrypt::new(config);
-            task_handles.push(tokio::spawn(async move {
-                if let Err(e) = dc_proxy.run_proxy(proxy_shutdown).await {
-                    error!(error = %e, "DNS-over-TLS proxy failed");
+            match DnsCrypt::bind().await {
+                Ok(socket) => {
+                    let mut dc = DnsCrypt::new(config.clone());
+                    if let Err(e) = dc.activate_redirect() {
+                        warn!(error = %e, "DNS encryption redirect failed (need root + nft)");
+                        // Drop the socket; no redirect, so no point running the proxy.
+                        None
+                    } else {
+                        // Spawn the proxy task on the already-bound socket.
+                        let proxy_shutdown = shutdown_tx.subscribe();
+                        let dc_proxy = DnsCrypt::new(config);
+                        task_handles.push(tokio::spawn(async move {
+                            if let Err(e) = dc_proxy.serve(socket, proxy_shutdown).await {
+                                error!(error = %e, "DNS-over-TLS proxy failed");
+                            }
+                        }));
+                        Some(dc)
+                    }
                 }
-            }));
-            Some(dc)
+                Err(e) => {
+                    warn!(error = %e, "DNS-over-TLS bind failed (port 5353 in use?); skipping");
+                    None
+                }
+            }
         } else {
             None
         };
@@ -255,7 +278,12 @@ impl Daemon {
             "bulwark daemon running"
         );
 
-        if active_count == 0 && !self.config.protect.arp_pin && !self.config.protect.client_isolation && !self.config.protect.dns_encrypt && !self.config.protect.mac_randomize {
+        if active_count == 0
+            && !self.config.protect.arp_pin
+            && !self.config.protect.client_isolation
+            && !self.config.protect.dns_encrypt
+            && !self.config.protect.mac_randomize
+        {
             warn!("no detectors or protections enabled — nothing to do");
             return Ok(());
         }
@@ -284,18 +312,20 @@ impl Daemon {
                         Some(threat) => {
                             total_threats += 1;
 
-                            // Deduplicate repeated identical threats
-                            if !dedup.should_emit(&threat) {
-                                suppressed_threats += 1;
-                                continue;
-                            }
-
-                            // Captive portal grace period: suppress alerts during startup window
+                            // Captive portal grace period: drop alerts entirely during startup
+                            // window (checked BEFORE dedup so real threats that persist past
+                            // the grace period are not silently suppressed).
                             if let Some(deadline) = grace_deadline {
                                 if Instant::now() < deadline {
                                     suppressed_threats += 1;
                                     continue;
                                 }
+                            }
+
+                            // Deduplicate repeated identical threats
+                            if !dedup.should_emit(&threat) {
+                                suppressed_threats += 1;
+                                continue;
                             }
 
                             // Desktop notification for High+ threats (best-effort, non-blocking)
