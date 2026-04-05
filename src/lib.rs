@@ -22,5 +22,6 @@ pub mod hardener;
 pub mod net_util;
 pub mod notify;
 pub mod protect;
+pub mod subprocess;
 
 pub use error::Error;

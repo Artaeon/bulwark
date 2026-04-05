@@ -133,23 +133,27 @@ table inet {TABLE_NAME} {{
         let ruleset = self.generate_ruleset();
         info!("activating firewall hardening");
 
-        let output = Command::new("nft")
+        // Spawn nft -f - and write the ruleset to stdin. Wrapped in a
+        // subprocess timeout so a hung nft cannot stall the threat response.
+        let mut child = Command::new("nft")
             .arg("-f")
             .arg("-")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .and_then(|mut child| {
-                use std::io::Write;
-                // Take() rather than &mut so stdin drops (and closes) before
-                // wait_with_output() — otherwise nft blocks waiting for EOF.
-                if let Some(mut stdin) = child.stdin.take() {
-                    stdin.write_all(ruleset.as_bytes())?;
-                }
-                child.wait_with_output()
-            })
             .map_err(|e| crate::Error::Hardener(format!("failed to run nft: {}", e)))?;
+
+        // Take() so stdin drops (EOF) before we wait, else nft blocks forever.
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin
+                .write_all(ruleset.as_bytes())
+                .map_err(|e| crate::Error::Hardener(format!("failed to write nft stdin: {}", e)))?;
+        }
+
+        let output =
+            crate::subprocess::wait_with_timeout(child, crate::subprocess::DEFAULT_TIMEOUT)?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
