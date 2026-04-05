@@ -99,10 +99,7 @@ impl Default for ProtectConfig {
             arp_pin: false,
             client_isolation: false,
             dns_encrypt: false,
-            dns_resolvers: vec![
-                "1.1.1.1:853".to_string(),
-                "8.8.8.8:853".to_string(),
-            ],
+            dns_resolvers: vec!["1.1.1.1:853".to_string(), "8.8.8.8:853".to_string()],
             mac_randomize: false,
         }
     }
@@ -189,11 +186,14 @@ impl Default for HardenerConfig {
 impl Config {
     pub fn load(path: &Path) -> Result<Self, crate::Error> {
         let contents = std::fs::read_to_string(path).map_err(|e| {
-            crate::Error::Config(format!("failed to read config file {}: {}", path.display(), e))
+            crate::Error::Config(format!(
+                "failed to read config file {}: {}",
+                path.display(),
+                e
+            ))
         })?;
-        let config: Config = toml::from_str(&contents).map_err(|e| {
-            crate::Error::Config(format!("failed to parse config file: {}", e))
-        })?;
+        let config: Config = toml::from_str(&contents)
+            .map_err(|e| crate::Error::Config(format!("failed to parse config file: {}", e)))?;
         config.validate()?;
         Ok(config)
     }
@@ -422,15 +422,19 @@ mod tests {
 
     #[test]
     fn test_validate_interface_too_long() {
-        let mut config = Config::default();
-        config.interface = "a".repeat(16);
+        let config = Config {
+            interface: "a".repeat(16),
+            ..Config::default()
+        };
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_validate_interface_max_length() {
-        let mut config = Config::default();
-        config.interface = "a".repeat(15); // Max valid
+        let config = Config {
+            interface: "a".repeat(15), // Max valid
+            ..Config::default()
+        };
         assert!(config.validate().is_ok());
     }
 

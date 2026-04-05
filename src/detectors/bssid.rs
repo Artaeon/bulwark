@@ -72,7 +72,10 @@ impl BssidDetector {
         let current = match query_bssid(&self.interface) {
             Some(state) => state,
             None => {
-                debug!(detector = DETECTOR_NAME, "not connected or iw not available");
+                debug!(
+                    detector = DETECTOR_NAME,
+                    "not connected or iw not available"
+                );
                 return threats;
             }
         };
@@ -227,7 +230,10 @@ Connected to aa:bb:cc:dd:ee:ff (on wlan0)
     #[test]
     fn test_baseline_no_threats() {
         let mut det = BssidDetector::new(
-            BssidConfig { enabled: true, poll_interval_secs: 10 },
+            BssidConfig {
+                enabled: true,
+                poll_interval_secs: 10,
+            },
             "wlan0".to_string(),
         );
         // Manually set state to simulate first connection
@@ -239,7 +245,10 @@ Connected to aa:bb:cc:dd:ee:ff (on wlan0)
     #[test]
     fn test_same_bssid_no_threat() {
         let mut det = BssidDetector::new(
-            BssidConfig { enabled: true, poll_interval_secs: 10 },
+            BssidConfig {
+                enabled: true,
+                poll_interval_secs: 10,
+            },
             "wlan0".to_string(),
         );
         det.state = Some(BssidState {

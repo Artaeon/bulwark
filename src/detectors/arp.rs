@@ -226,8 +226,12 @@ IP address       HW type     Flags       HW address            Mask     Device
             "IP address       HW type     Flags       HW address            Mask     Device\n",
         );
         // Keep existing entries
-        flood.push_str("192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0\n");
-        flood.push_str("192.168.1.100    0x1         0x2         11:22:33:44:55:66     *        wlan0\n");
+        flood.push_str(
+            "192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0\n",
+        );
+        flood.push_str(
+            "192.168.1.100    0x1         0x2         11:22:33:44:55:66     *        wlan0\n",
+        );
         // Add 15 new entries
         for i in 0..15u8 {
             flood.push_str(&format!(
@@ -238,7 +242,9 @@ IP address       HW type     Flags       HW address            Mask     Device
         }
 
         let threats = det.analyze(&flood);
-        assert!(threats.iter().any(|t| matches!(t.kind, ThreatKind::ArpFlood { .. })));
+        assert!(threats
+            .iter()
+            .any(|t| matches!(t.kind, ThreatKind::ArpFlood { .. })));
     }
 
     #[test]
@@ -337,8 +343,12 @@ IP address       HW type     Flags       HW address            Mask     Device
         let mut flood = String::from(
             "IP address       HW type     Flags       HW address            Mask     Device\n",
         );
-        flood.push_str("192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0\n");
-        flood.push_str("192.168.1.100    0x1         0x2         11:22:33:44:55:66     *        wlan0\n");
+        flood.push_str(
+            "192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0\n",
+        );
+        flood.push_str(
+            "192.168.1.100    0x1         0x2         11:22:33:44:55:66     *        wlan0\n",
+        );
         for i in 0..15u8 {
             flood.push_str(&format!(
                 "192.168.1.{}    0x1         0x2         de:ad:00:00:00:{:02x}     *        wlan0\n",
@@ -346,10 +356,14 @@ IP address       HW type     Flags       HW address            Mask     Device
             ));
         }
         let threats = det.analyze(&flood);
-        assert!(threats.iter().any(|t| matches!(t.kind, ThreatKind::ArpFlood { .. })));
+        assert!(threats
+            .iter()
+            .any(|t| matches!(t.kind, ThreatKind::ArpFlood { .. })));
 
         // Same table again — no new entries, so no flood
         let threats = det.analyze(&flood);
-        assert!(threats.iter().all(|t| !matches!(t.kind, ThreatKind::ArpFlood { .. })));
+        assert!(threats
+            .iter()
+            .all(|t| !matches!(t.kind, ThreatKind::ArpFlood { .. })));
     }
 }

@@ -56,10 +56,7 @@ fn main() -> ExitCode {
     };
 
     // Setup logging
-    let log_level = cli
-        .log_level
-        .as_deref()
-        .unwrap_or(&config.log_level);
+    let log_level = cli.log_level.as_deref().unwrap_or(&config.log_level);
     let filter = EnvFilter::try_new(log_level).unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -78,20 +75,90 @@ fn main() -> ExitCode {
                 &config.interface
             }
         );
-        println!("  ARP detector: {}", if config.arp.enabled { "enabled" } else { "disabled" });
-        println!("  Gateway detector: {}", if config.gateway.enabled { "enabled" } else { "disabled" });
-        println!("  DNS detector: {}", if config.dns.enabled { "enabled" } else { "disabled" });
-        println!("  DHCP detector: {}", if config.dhcp.enabled { "enabled" } else { "disabled" });
-        println!("  BSSID detector: {}", if config.bssid.enabled { "enabled" } else { "disabled" });
-        println!("  Hardener: {}", if config.hardener.enabled { "enabled" } else { "disabled" });
+        println!(
+            "  ARP detector: {}",
+            if config.arp.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        println!(
+            "  Gateway detector: {}",
+            if config.gateway.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        println!(
+            "  DNS detector: {}",
+            if config.dns.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        println!(
+            "  DHCP detector: {}",
+            if config.dhcp.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        println!(
+            "  BSSID detector: {}",
+            if config.bssid.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        println!(
+            "  Hardener: {}",
+            if config.hardener.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
         if config.startup_grace_secs > 0 {
             println!("  Startup grace: {}s", config.startup_grace_secs);
         }
         println!("  Protections:");
-        println!("    ARP pinning: {}", if config.protect.arp_pin { "enabled" } else { "disabled" });
-        println!("    Client isolation: {}", if config.protect.client_isolation { "enabled" } else { "disabled" });
-        println!("    DNS encryption: {}", if config.protect.dns_encrypt { "enabled" } else { "disabled" });
-        println!("    MAC randomization: {}", if config.protect.mac_randomize { "enabled" } else { "disabled" });
+        println!(
+            "    ARP pinning: {}",
+            if config.protect.arp_pin {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        println!(
+            "    Client isolation: {}",
+            if config.protect.client_isolation {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        println!(
+            "    DNS encryption: {}",
+            if config.protect.dns_encrypt {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
+        println!(
+            "    MAC randomization: {}",
+            if config.protect.mac_randomize {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        );
         return ExitCode::SUCCESS;
     }
 
@@ -106,9 +173,7 @@ fn main() -> ExitCode {
     // SAFETY: geteuid() is a simple syscall with no preconditions, no pointers, no UB risk.
     if unsafe { libc::geteuid() } != 0 {
         eprintln!("warning: bulwark should run as root for full functionality");
-        eprintln!(
-            "         (raw sockets, nftables, interface binding require root/CAP_NET_RAW)"
-        );
+        eprintln!("         (raw sockets, nftables, interface binding require root/CAP_NET_RAW)");
     }
 
     // Run the daemon
@@ -129,24 +194,22 @@ fn main() -> ExitCode {
         // Handle SIGINT and SIGTERM for graceful shutdown
         let shutdown_tx_clone = shutdown_tx.clone();
         tokio::spawn(async move {
-            let mut sigint = match
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    error!(error = %e, "failed to register SIGINT handler");
-                    return;
-                }
-            };
-            let mut sigterm = match
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    error!(error = %e, "failed to register SIGTERM handler");
-                    return;
-                }
-            };
+            let mut sigint =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!(error = %e, "failed to register SIGINT handler");
+                        return;
+                    }
+                };
+            let mut sigterm =
+                match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!(error = %e, "failed to register SIGTERM handler");
+                        return;
+                    }
+                };
 
             tokio::select! {
                 _ = sigint.recv() => {
@@ -159,10 +222,7 @@ fn main() -> ExitCode {
             let _ = shutdown_tx_clone.send(());
         });
 
-        info!(
-            version = env!("CARGO_PKG_VERSION"),
-            "bulwark starting"
-        );
+        info!(version = env!("CARGO_PKG_VERSION"), "bulwark starting");
 
         let daemon = daemon::Daemon::new(config);
         if let Err(e) = daemon.run(shutdown_tx).await {

@@ -104,10 +104,7 @@ impl DnsDetector {
         }
 
         // Query system resolver
-        let system_ips = match self
-            .query_resolver(&system_resolvers[0], domain)
-            .await
-        {
+        let system_ips = match self.query_resolver(&system_resolvers[0], domain).await {
             Ok(ips) => ips,
             Err(e) => {
                 debug!(
@@ -206,9 +203,8 @@ impl DnsDetector {
                         return Err(crate::Error::Network("DNS response ID mismatch".into()));
                     }
                 }
-                net_util::parse_dns_response(response).ok_or_else(|| {
-                    crate::Error::Network("failed to parse DNS response".into())
-                })
+                net_util::parse_dns_response(response)
+                    .ok_or_else(|| crate::Error::Network("failed to parse DNS response".into()))
             }
             Ok(Err(e)) => Err(crate::Error::Io(e)),
             Err(_) => Err(crate::Error::Network(format!(
@@ -294,10 +290,8 @@ search local
     #[test]
     fn test_poison_detection_logic() {
         // System returns 1.2.3.4, trusted returns 93.184.216.34 — no overlap = poison
-        let system: HashSet<Ipv4Addr> =
-            [Ipv4Addr::new(1, 2, 3, 4)].into_iter().collect();
-        let trusted: HashSet<Ipv4Addr> =
-            [Ipv4Addr::new(93, 184, 216, 34)].into_iter().collect();
+        let system: HashSet<Ipv4Addr> = [Ipv4Addr::new(1, 2, 3, 4)].into_iter().collect();
+        let trusted: HashSet<Ipv4Addr> = [Ipv4Addr::new(93, 184, 216, 34)].into_iter().collect();
         let overlap = system.intersection(&trusted).count();
         assert_eq!(overlap, 0);
     }
@@ -305,9 +299,7 @@ search local
     #[test]
     fn test_cdn_overlap_no_false_positive() {
         // CDN: system returns IP A, trusted returns IPs A and B — overlap exists, OK
-        let system: HashSet<Ipv4Addr> = [Ipv4Addr::new(104, 16, 132, 229)]
-            .into_iter()
-            .collect();
+        let system: HashSet<Ipv4Addr> = [Ipv4Addr::new(104, 16, 132, 229)].into_iter().collect();
         let trusted: HashSet<Ipv4Addr> = [
             Ipv4Addr::new(104, 16, 132, 229),
             Ipv4Addr::new(104, 16, 133, 229),
@@ -321,18 +313,12 @@ search local
     #[test]
     fn test_multiple_system_ips_partial_overlap_ok() {
         // System returns {A, B}, trusted returns {B, C} — overlap on B
-        let system: HashSet<Ipv4Addr> = [
-            Ipv4Addr::new(1, 1, 1, 1),
-            Ipv4Addr::new(2, 2, 2, 2),
-        ]
-        .into_iter()
-        .collect();
-        let trusted: HashSet<Ipv4Addr> = [
-            Ipv4Addr::new(2, 2, 2, 2),
-            Ipv4Addr::new(3, 3, 3, 3),
-        ]
-        .into_iter()
-        .collect();
+        let system: HashSet<Ipv4Addr> = [Ipv4Addr::new(1, 1, 1, 1), Ipv4Addr::new(2, 2, 2, 2)]
+            .into_iter()
+            .collect();
+        let trusted: HashSet<Ipv4Addr> = [Ipv4Addr::new(2, 2, 2, 2), Ipv4Addr::new(3, 3, 3, 3)]
+            .into_iter()
+            .collect();
         let overlap = system.intersection(&trusted).count();
         assert!(overlap > 0);
     }

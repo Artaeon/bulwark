@@ -78,37 +78,67 @@ pub enum ThreatKind {
 impl fmt::Display for ThreatKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ThreatKind::ArpSpoof { ip, old_mac, new_mac } => {
-                write!(f, "ARP spoof: {} changed from {} to {}", ip, old_mac, new_mac)
+            ThreatKind::ArpSpoof {
+                ip,
+                old_mac,
+                new_mac,
+            } => {
+                write!(
+                    f,
+                    "ARP spoof: {} changed from {} to {}",
+                    ip, old_mac, new_mac
+                )
             }
-            ThreatKind::ArpFlood { new_entries, window_secs } => {
-                write!(f, "ARP flood: {} new entries in {}s", new_entries, window_secs)
+            ThreatKind::ArpFlood {
+                new_entries,
+                window_secs,
+            } => {
+                write!(
+                    f,
+                    "ARP flood: {} new entries in {}s",
+                    new_entries, window_secs
+                )
             }
             ThreatKind::GatewayIpChanged { old_ip, new_ip } => {
                 write!(f, "Gateway IP changed: {} -> {}", old_ip, new_ip)
             }
-            ThreatKind::GatewayMacChanged { gateway_ip, old_mac, new_mac } => {
+            ThreatKind::GatewayMacChanged {
+                gateway_ip,
+                old_mac,
+                new_mac,
+            } => {
                 write!(
                     f,
                     "Gateway {} MAC changed: {} -> {}",
                     gateway_ip, old_mac, new_mac
                 )
             }
-            ThreatKind::RogueDhcpServer { expected_server, rogue_server } => {
+            ThreatKind::RogueDhcpServer {
+                expected_server,
+                rogue_server,
+            } => {
                 write!(
                     f,
                     "Rogue DHCP server {} (expected {})",
                     rogue_server, expected_server
                 )
             }
-            ThreatKind::DnsPoisoning { domain, system_results, trusted_results } => {
+            ThreatKind::DnsPoisoning {
+                domain,
+                system_results,
+                trusted_results,
+            } => {
                 write!(
                     f,
                     "DNS poisoning for {}: system={:?}, trusted={:?}",
                     domain, system_results, trusted_results
                 )
             }
-            ThreatKind::BssidChanged { ssid, old_bssid, new_bssid } => {
+            ThreatKind::BssidChanged {
+                ssid,
+                old_bssid,
+                new_bssid,
+            } => {
                 write!(
                     f,
                     "BSSID changed on '{}': {} -> {} (possible evil twin)",

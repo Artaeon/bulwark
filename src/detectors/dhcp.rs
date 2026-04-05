@@ -191,7 +191,9 @@ async fn create_dhcp_listener(interface: &str) -> Result<tokio::net::UdpSocket, 
             optval.as_ptr() as *const libc::c_void,
             // IFNAMSIZ is 16 bytes; this fits in socklen_t on all platforms.
             #[allow(clippy::cast_possible_truncation)]
-            { std::mem::size_of_val(&optval) as libc::socklen_t },
+            {
+                std::mem::size_of_val(&optval) as libc::socklen_t
+            },
         )
     };
     if ret < 0 {
@@ -203,9 +205,7 @@ async fn create_dhcp_listener(interface: &str) -> Result<tokio::net::UdpSocket, 
     }
 
     // Enable broadcast reception
-    socket
-        .set_broadcast(true)
-        .map_err(crate::Error::Io)?;
+    socket.set_broadcast(true).map_err(crate::Error::Io)?;
 
     Ok(socket)
 }
@@ -351,8 +351,7 @@ mod tests {
         packet[DHCP_SIADDR_OFFSET + 3] = octets[3];
 
         // Magic cookie
-        packet[DHCP_OPTIONS_OFFSET..DHCP_OPTIONS_OFFSET + 4]
-            .copy_from_slice(&DHCP_MAGIC_COOKIE);
+        packet[DHCP_OPTIONS_OFFSET..DHCP_OPTIONS_OFFSET + 4].copy_from_slice(&DHCP_MAGIC_COOKIE);
 
         // Option 53: DHCP Message Type = OFFER (2)
         packet.push(DHCP_OPT_MESSAGE_TYPE);
@@ -415,10 +414,7 @@ mod tests {
 
     #[test]
     fn test_check_server_baseline() {
-        let mut det = DhcpDetector::new(
-            DhcpConfig::default(),
-            "wlan0".to_string(),
-        );
+        let mut det = DhcpDetector::new(DhcpConfig::default(), "wlan0".to_string());
         let server = Ipv4Addr::new(192, 168, 1, 1);
         assert!(det.check_server(server).is_none()); // Baseline
         assert_eq!(det.known_server, Some(server));
@@ -426,10 +422,7 @@ mod tests {
 
     #[test]
     fn test_check_server_same() {
-        let mut det = DhcpDetector::new(
-            DhcpConfig::default(),
-            "wlan0".to_string(),
-        );
+        let mut det = DhcpDetector::new(DhcpConfig::default(), "wlan0".to_string());
         let server = Ipv4Addr::new(192, 168, 1, 1);
         det.check_server(server);
         assert!(det.check_server(server).is_none()); // Same server, no threat
@@ -437,10 +430,7 @@ mod tests {
 
     #[test]
     fn test_check_server_rogue() {
-        let mut det = DhcpDetector::new(
-            DhcpConfig::default(),
-            "wlan0".to_string(),
-        );
+        let mut det = DhcpDetector::new(DhcpConfig::default(), "wlan0".to_string());
         let legit = Ipv4Addr::new(192, 168, 1, 1);
         let rogue = Ipv4Addr::new(192, 168, 1, 99);
         det.check_server(legit);
@@ -486,8 +476,7 @@ lease {
         // Exactly 240 bytes (236 + 4 magic cookie) with no options
         let mut packet = vec![0u8; DHCP_OPTIONS_OFFSET + 4];
         packet[DHCP_OP_OFFSET] = 2;
-        packet[DHCP_OPTIONS_OFFSET..DHCP_OPTIONS_OFFSET + 4]
-            .copy_from_slice(&DHCP_MAGIC_COOKIE);
+        packet[DHCP_OPTIONS_OFFSET..DHCP_OPTIONS_OFFSET + 4].copy_from_slice(&DHCP_MAGIC_COOKIE);
         // No options, no message type → not an OFFER
         assert!(parse_dhcp_offer(&packet).is_none());
     }
@@ -505,8 +494,7 @@ lease {
     fn test_parse_dhcp_offer_option_length_overflow() {
         let mut packet = vec![0u8; DHCP_OPTIONS_OFFSET + 4];
         packet[DHCP_OP_OFFSET] = 2;
-        packet[DHCP_OPTIONS_OFFSET..DHCP_OPTIONS_OFFSET + 4]
-            .copy_from_slice(&DHCP_MAGIC_COOKIE);
+        packet[DHCP_OPTIONS_OFFSET..DHCP_OPTIONS_OFFSET + 4].copy_from_slice(&DHCP_MAGIC_COOKIE);
         // Option with length claiming 255 bytes but packet ends immediately
         packet.push(53); // message type option
         packet.push(255); // length = 255 (way past end of packet)
@@ -525,8 +513,7 @@ lease {
         packet[DHCP_SIADDR_OFFSET + 1] = octets[1];
         packet[DHCP_SIADDR_OFFSET + 2] = octets[2];
         packet[DHCP_SIADDR_OFFSET + 3] = octets[3];
-        packet[DHCP_OPTIONS_OFFSET..DHCP_OPTIONS_OFFSET + 4]
-            .copy_from_slice(&DHCP_MAGIC_COOKIE);
+        packet[DHCP_OPTIONS_OFFSET..DHCP_OPTIONS_OFFSET + 4].copy_from_slice(&DHCP_MAGIC_COOKIE);
         // Add padding bytes before the message type option
         packet.push(0); // pad
         packet.push(0); // pad
@@ -591,7 +578,7 @@ lease {
         let mut det = DhcpDetector::new(DhcpConfig::default(), "wlan0".into());
         let legit = Ipv4Addr::new(192, 168, 1, 1);
         det.check_server(legit); // baseline
-        // Multiple different rogues should all be detected
+                                 // Multiple different rogues should all be detected
         assert!(det.check_server(Ipv4Addr::new(10, 0, 0, 1)).is_some());
         assert!(det.check_server(Ipv4Addr::new(172, 16, 0, 1)).is_some());
         // Original still OK

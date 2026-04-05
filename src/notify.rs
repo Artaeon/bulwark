@@ -34,10 +34,14 @@ pub fn notify_threat(threat: &Threat) {
     // Fire and forget — don't block the daemon if notify-send is missing
     let result = Command::new("notify-send")
         .args([
-            "--urgency", urgency,
-            "--app-name", "bulwark",
-            "--icon", "security-high",
-            "--category", "network.error",
+            "--urgency",
+            urgency,
+            "--app-name",
+            "bulwark",
+            "--icon",
+            "security-high",
+            "--category",
+            "network.error",
             &summary,
             &body,
         ])
@@ -55,7 +59,7 @@ pub fn notify_threat(threat: &Threat) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alert::{ThreatKind, Threat};
+    use crate::alert::{Threat, ThreatKind};
     use std::net::Ipv4Addr;
 
     #[test]

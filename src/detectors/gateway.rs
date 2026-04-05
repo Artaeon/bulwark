@@ -286,7 +286,10 @@ IP address       HW type     Flags       HW address            Mask     Device
 
         let threats = det.analyze(new_route, new_arp);
         assert_eq!(threats.len(), 1);
-        assert!(matches!(threats[0].kind, ThreatKind::GatewayIpChanged { .. }));
+        assert!(matches!(
+            threats[0].kind,
+            ThreatKind::GatewayIpChanged { .. }
+        ));
     }
 
     #[test]

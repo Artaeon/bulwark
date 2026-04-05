@@ -390,10 +390,7 @@ wlan0\t0001A8C0\t00000000\t0001\t0\t0\t600\tFFFFFF00\t0\t0\t0";
     #[test]
     fn test_hex_to_ipv4() {
         // 0101A8C0 -> C0.A8.01.01 = 192.168.1.1 (little-endian)
-        assert_eq!(
-            hex_to_ipv4("0101A8C0"),
-            Some(Ipv4Addr::new(192, 168, 1, 1))
-        );
+        assert_eq!(hex_to_ipv4("0101A8C0"), Some(Ipv4Addr::new(192, 168, 1, 1)));
     }
 
     #[test]
@@ -402,7 +399,7 @@ wlan0\t0001A8C0\t00000000\t0001\t0\t0\t600\tFFFFFF00\t0\t0\t0";
         // Header
         assert_eq!(query[0..2], [0x12, 0x34]); // ID
         assert_eq!(query[4..6], [0x00, 0x01]); // QDCOUNT
-        // Question: 7example3com0
+                                               // Question: 7example3com0
         assert_eq!(query[12], 7); // "example" length
         assert_eq!(&query[13..20], b"example");
         assert_eq!(query[20], 3); // "com" length
@@ -477,7 +474,8 @@ wlan0\t0001A8C0\t00000000\t0001\t0\t0\t600\tFFFFFF00\t0\t0\t0";
 
     #[test]
     fn test_parse_arp_table_header_only() {
-        let content = "IP address       HW type     Flags       HW address            Mask     Device";
+        let content =
+            "IP address       HW type     Flags       HW address            Mask     Device";
         let entries = parse_arp_table(content);
         assert!(entries.is_empty());
     }
@@ -666,9 +664,9 @@ wlan0\t00000000\tNOTHEX\t0003";
         // Question: a.com
         packet.extend_from_slice(&[1, b'a', 3, b'c', b'o', b'm', 0]);
         packet.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]); // QTYPE/QCLASS
-        // Answer: just a name pointer but no resource record data
+                                                             // Answer: just a name pointer but no resource record data
         packet.extend_from_slice(&[0xC0, 0x0C]); // pointer
-        // Only 2 bytes, need 10 for full RR header — should break gracefully
+                                                 // Only 2 bytes, need 10 for full RR header — should break gracefully
         let result = parse_dns_response(&packet);
         // Should return Some with empty vec (breaks out of answer loop gracefully)
         assert!(result.is_some());
@@ -791,10 +789,7 @@ wlan0\t00000000\tNOTHEX\t0003";
 
     #[test]
     fn test_resolve_mac_from_arp_empty() {
-        assert_eq!(
-            resolve_mac_from_arp(&[], Ipv4Addr::new(10, 0, 0, 1)),
-            None
-        );
+        assert_eq!(resolve_mac_from_arp(&[], Ipv4Addr::new(10, 0, 0, 1)), None);
     }
 
     #[test]
@@ -822,8 +817,9 @@ wlan0\t00000000\tNOTHEX\t0003";
             "IP address       HW type     Flags       HW address            Mask     Device\n",
         );
         for i in 0..1000u32 {
-            let b3 = (i / 256) as u8;
-            let b4 = (i % 256) as u8;
+            // i < 1000, so i/256 < 4 and i%256 < 256 — both fit in u8.
+            let b3 = u8::try_from(i / 256).unwrap();
+            let b4 = u8::try_from(i % 256).unwrap();
             content.push_str(&format!(
                 "192.168.{}.{}    0x1         0x2         aa:bb:cc:00:{:02x}:{:02x}     *        wlan0\n",
                 b3, b4, b3, b4

@@ -122,10 +122,7 @@ fn read_interface_mac(interface: &str) -> Result<String, crate::Error> {
     let path = format!("/sys/class/net/{}/address", interface);
     std::fs::read_to_string(&path)
         .map(|s| s.trim().to_string())
-        .map_err(|e| crate::Error::Network(format!(
-            "failed to read MAC from {}: {}",
-            path, e
-        )))
+        .map_err(|e| crate::Error::Network(format!("failed to read MAC from {}: {}", path, e)))
 }
 
 /// Apply a MAC address to an interface (requires ip link down/up cycle).
@@ -147,10 +144,9 @@ fn apply_mac(interface: &str, mac: &str) -> Result<(), crate::Error> {
 }
 
 fn run_ip_command(args: &[&str]) -> Result<(), crate::Error> {
-    let output = Command::new("ip")
-        .args(args)
-        .output()
-        .map_err(|e| crate::Error::Network(format!("failed to run ip {}: {}", args.join(" "), e)))?;
+    let output = Command::new("ip").args(args).output().map_err(|e| {
+        crate::Error::Network(format!("failed to run ip {}: {}", args.join(" "), e))
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -185,9 +181,17 @@ mod tests {
             let mac = generate_random_mac();
             let first_byte = u8::from_str_radix(&mac[..2], 16).unwrap();
             // U/L bit (bit 1) must be set
-            assert!(first_byte & 0x02 != 0, "U/L bit not set: {:02x}", first_byte);
+            assert!(
+                first_byte & 0x02 != 0,
+                "U/L bit not set: {:02x}",
+                first_byte
+            );
             // Multicast bit (bit 0) must be cleared
-            assert!(first_byte & 0x01 == 0, "multicast bit set: {:02x}", first_byte);
+            assert!(
+                first_byte & 0x01 == 0,
+                "multicast bit set: {:02x}",
+                first_byte
+            );
         }
     }
 
