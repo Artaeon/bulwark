@@ -483,7 +483,7 @@ src/
 ### Design principles
 
 - **Minimal attack surface** — A security tool with a sprawling dependency tree is a liability. bulwark uses only essential, well-audited crates.
-- **No panics in production** — `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]` is enforced at compile time. All error paths return `Result`.
+- **No panics in production** — `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]` enforced at compile time, checked in CI via `cargo clippy --all-targets -- -D warnings`. All error paths return `Result`.
 - **Hardened parsers** — DNS, DHCP, ARP, and route parsers validate every byte: bounds checking, loop limits, checked arithmetic, and adversarial input rejection.
 - **Testable core logic** — Detection algorithms are pure functions that accept string/byte input and return threats. No filesystem or network access in test paths.
 - **Graceful lifecycle** — Clean startup, SIGINT/SIGTERM handling, firewall rollback on shutdown, threat summary on exit.

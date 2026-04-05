@@ -31,7 +31,7 @@ You can expect an initial response within 48 hours. We will work with you to und
 
 ### What we enforce
 
-- **No panics in production code** — `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]` at the crate root.
+- **No panics in production code** — `#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]` at the crate root, enforced in CI via `cargo clippy --all-targets -- -D warnings`.
 - **Bounds-checked parsing** — All packet parsers use explicit length checks and `checked_add()` for offset arithmetic.
 - **Loop limits** — DNS name traversal capped at 128 iterations; section counts capped at 64.
 - **Minimal unsafe** — Two `unsafe` blocks total, each with documented `SAFETY` invariants.
