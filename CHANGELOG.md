@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 3 subprocess timeout tests (fast exit, timeout kill, non-zero exit).
 
 ### Changed
-- Test count: 196 → 217.
+- Test count: 196 → 272 (deeper coverage of every module: BSSID
+  detector logic, dedup stress, hardener edge cases, parser edge
+  cases, protect module lifecycle, all notify threat variants).
 
 ## [0.1.0] — Initial release
 

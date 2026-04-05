@@ -476,15 +476,15 @@ cargo test
 
 ### Expected:
 ```
-running 217 tests
+running 272 tests
 test alert::tests::test_severity_ordering ... ok
 test alert::tests::test_severity_display ... ok
 test config::tests::test_validate_default_config_passes ... ok
 ...
-test result: ok. 217 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 272 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
-All 217 tests should pass on any Linux system with a recent Rust toolchain.
+All 272 tests should pass on any Linux system with a recent Rust toolchain.
 
 ---
 
