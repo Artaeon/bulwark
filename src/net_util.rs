@@ -828,4 +828,134 @@ wlan0\t00000000\tNOTHEX\t0003";
         let entries = parse_arp_table(&content);
         assert_eq!(entries.len(), 1000);
     }
+
+    // === Additional coverage ===
+
+    #[test]
+    fn test_hex_to_ipv4_zero() {
+        assert_eq!(hex_to_ipv4("00000000"), Some(Ipv4Addr::new(0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn test_hex_to_ipv4_broadcast() {
+        // FFFFFFFF little-endian = 255.255.255.255
+        assert_eq!(
+            hex_to_ipv4("FFFFFFFF"),
+            Some(Ipv4Addr::new(255, 255, 255, 255))
+        );
+    }
+
+    #[test]
+    fn test_hex_to_ipv4_loopback() {
+        // 0100007F little-endian = 127.0.0.1
+        assert_eq!(hex_to_ipv4("0100007F"), Some(Ipv4Addr::new(127, 0, 0, 1)));
+    }
+
+    #[test]
+    fn test_hex_to_ipv4_lowercase() {
+        assert_eq!(hex_to_ipv4("0101a8c0"), Some(Ipv4Addr::new(192, 168, 1, 1)));
+    }
+
+    #[test]
+    fn test_dns_response_with_multiple_a_records() {
+        let mut response = vec![
+            0x12, 0x34, 0x81, 0x80, // header
+            0x00, 0x01, // qdcount
+            0x00, 0x02, // ancount = 2
+            0x00, 0x00, 0x00, 0x00,
+        ];
+        response.extend_from_slice(&[7]);
+        response.extend_from_slice(b"example");
+        response.extend_from_slice(&[3]);
+        response.extend_from_slice(b"com");
+        response.push(0);
+        response.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        // Answer 1
+        response.extend_from_slice(&[0xC0, 0x0C]);
+        response.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        response.extend_from_slice(&[0x00, 0x00, 0x01, 0x00]);
+        response.extend_from_slice(&[0x00, 0x04]);
+        response.extend_from_slice(&[1, 2, 3, 4]);
+        // Answer 2
+        response.extend_from_slice(&[0xC0, 0x0C]);
+        response.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        response.extend_from_slice(&[0x00, 0x00, 0x01, 0x00]);
+        response.extend_from_slice(&[0x00, 0x04]);
+        response.extend_from_slice(&[5, 6, 7, 8]);
+
+        let ips = parse_dns_response(&response).expect("parses");
+        assert_eq!(ips.len(), 2);
+        assert_eq!(ips[0], Ipv4Addr::new(1, 2, 3, 4));
+        assert_eq!(ips[1], Ipv4Addr::new(5, 6, 7, 8));
+    }
+
+    #[test]
+    fn test_dns_response_ignores_non_a_record() {
+        // AAAA record (TYPE 28) should be skipped, not included
+        let mut response = vec![
+            0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+        ];
+        response.extend_from_slice(&[7]);
+        response.extend_from_slice(b"example");
+        response.extend_from_slice(&[3]);
+        response.extend_from_slice(b"com");
+        response.push(0);
+        response.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        // AAAA answer
+        response.extend_from_slice(&[0xC0, 0x0C]);
+        response.extend_from_slice(&[0x00, 0x1c]); // TYPE 28 = AAAA
+        response.extend_from_slice(&[0x00, 0x01]);
+        response.extend_from_slice(&[0x00, 0x00, 0x01, 0x00]);
+        response.extend_from_slice(&[0x00, 0x10]); // 16 bytes
+        response.extend(std::iter::repeat(0u8).take(16));
+        let ips = parse_dns_response(&response).expect("parses");
+        assert!(ips.is_empty(), "only A records should be extracted");
+    }
+
+    #[test]
+    fn test_mac_addr_display_leading_zeros() {
+        let mac = MacAddr([0x00, 0x01, 0x02, 0x03, 0x04, 0x05]);
+        assert_eq!(format!("{}", mac), "00:01:02:03:04:05");
+    }
+
+    #[test]
+    fn test_mac_addr_hash_in_hashmap() {
+        let mut map = std::collections::HashMap::new();
+        let mac = MacAddr([0xaa; 6]);
+        map.insert(mac, "device");
+        assert_eq!(map.get(&MacAddr([0xaa; 6])), Some(&"device"));
+    }
+
+    #[test]
+    fn test_parse_arp_table_multiple_devices() {
+        let content = "\
+IP address       HW type     Flags       HW address            Mask     Device
+192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:01     *        wlan0
+192.168.1.2      0x1         0x2         aa:bb:cc:dd:ee:02     *        eth0
+192.168.1.3      0x1         0x2         aa:bb:cc:dd:ee:03     *        wlan1";
+        let entries = parse_arp_table(content);
+        assert_eq!(entries.len(), 3);
+        let wlan0_map = arp_entries_to_map(&entries, Some("wlan0"));
+        let eth0_map = arp_entries_to_map(&entries, Some("eth0"));
+        let wlan1_map = arp_entries_to_map(&entries, Some("wlan1"));
+        assert_eq!(wlan0_map.len(), 1);
+        assert_eq!(eth0_map.len(), 1);
+        assert_eq!(wlan1_map.len(), 1);
+    }
+
+    #[test]
+    fn test_build_dns_query_id_in_header() {
+        let query = build_dns_query(0xDEAD, "a.com").unwrap();
+        assert_eq!(query[0], 0xDE);
+        assert_eq!(query[1], 0xAD);
+    }
+
+    #[test]
+    fn test_parse_dns_response_only_header() {
+        let mut packet = [0u8; 12];
+        packet[2] = 0x80; // QR=1
+                          // ancount=0, so empty Vec is returned
+        let result = parse_dns_response(&packet);
+        assert_eq!(result, Some(Vec::new()));
+    }
 }
