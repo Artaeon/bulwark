@@ -1,0 +1,152 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --locked
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          ARCHIVE="bulwark-${VERSION}-${{ matrix.target }}"
+          mkdir -p "dist/${ARCHIVE}"
+          cp target/${{ matrix.target }}/release/bulwark "dist/${ARCHIVE}/"
+          cp README.md LICENSE SECURITY.md bulwark.toml bulwark.service install.sh uninstall.sh "dist/${ARCHIVE}/"
+          [ -f EXAMPLES.md ] && cp EXAMPLES.md "dist/${ARCHIVE}/" || true
+          cd dist
+          tar -czf "${ARCHIVE}.tar.gz" "${ARCHIVE}"
+          sha256sum "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bulwark-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          cat > release_notes.md <<'EOF'
+          ## bulwark ${{ steps.version.outputs.version }}
+
+          Network security daemon for open/untrusted wireless networks.
+
+          ### Installation
+
+          **From binary release:**
+          ```bash
+          curl -LO https://github.com/Artaeon/bulwark/releases/download/${{ steps.version.outputs.version }}/bulwark-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
+          tar xzf bulwark-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
+          cd bulwark-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu
+          sudo ./install.sh
+          ```
+
+          **From source:**
+          ```bash
+          git clone https://github.com/Artaeon/bulwark.git
+          cd bulwark
+          git checkout ${{ steps.version.outputs.version }}
+          sudo ./install.sh
+          ```
+
+          ### Verification
+
+          All archives include a `.sha256` file. Verify with:
+          ```bash
+          sha256sum -c bulwark-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz.sha256
+          ```
+
+          ### Supported platforms
+
+          - `x86_64-unknown-linux-gnu` — Linux x86_64 (glibc)
+          - `x86_64-unknown-linux-musl` — Linux x86_64 (static musl)
+          - `aarch64-unknown-linux-gnu` — Linux ARM64
+
+          See [README](https://github.com/Artaeon/bulwark/blob/master/README.md) for full documentation.
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: bulwark ${{ steps.version.outputs.version }}
+          body_path: release_notes.md
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
