@@ -16,11 +16,13 @@
 </p>
 
 <p align="center">
-  <img alt="Language" src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
-  <img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"/>
-  <img alt="Platform" src="https://img.shields.io/badge/platform-Linux-lightgrey?style=flat-square"/>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-190%20passing-brightgreen?style=flat-square"/>
-  <img alt="CI" src="https://img.shields.io/badge/CI-GitHub%20Actions-blue?style=flat-square"/>
+  <a href="https://github.com/Artaeon/bulwark/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/Artaeon/bulwark/ci.yml?branch=master&label=CI&style=flat-square"/></a>
+  <a href="https://github.com/Artaeon/bulwark/actions/workflows/security.yml"><img alt="Security" src="https://img.shields.io/github/actions/workflow/status/Artaeon/bulwark/security.yml?branch=master&label=security&style=flat-square"/></a>
+  <a href="https://github.com/Artaeon/bulwark/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Artaeon/bulwark?style=flat-square"/></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/Artaeon/bulwark?style=flat-square"/></a>
+  <img alt="Rust" src="https://img.shields.io/badge/rust-1.70%2B-orange?style=flat-square&logo=rust"/>
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Linux-lightgrey?style=flat-square&logo=linux"/>
+  <img alt="Tests" src="https://img.shields.io/badge/tests-196%20passing-brightgreen?style=flat-square"/>
 </p>
 
 ---
@@ -496,9 +498,9 @@ src/
 ```
 $ cargo test
 
-running 190 tests
+running 196 tests
 ...
-test result: ok. 190 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 196 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 ### Test coverage by module
@@ -570,21 +572,27 @@ A: Run `sudo bulwark --foreground --log-level debug` and in another terminal run
 **Q: Can I integrate alerts with my SIEM / Slack / email?**
 A: Today, alerts go to stderr (and journald when run as a service). You can pipe journald output to anything — Promtail, Vector, Fluent Bit, or a simple `grep | mail` script. Native webhook/SIEM support is a planned feature.
 
-**Q: What's the deal with the 190 tests?**
+**Q: What's the deal with the 196 tests?**
 A: Every parser has adversarial input tests (malformed packets, binary garbage, overflow attempts). Every detector has edge-case tests (empty tables, disappearing routes, simultaneous changes). Every protection has lifecycle tests. See the test coverage table above.
 
 ---
 
 ## Contributing
 
-Contributions welcome! Please:
+Contributions are warmly welcomed. See [CONTRIBUTING.md](CONTRIBUTING.md) for full development setup, coding standards, testing requirements, and the PR process.
 
-1. Run `cargo test` and `cargo clippy -- -D warnings` before submitting
-2. Add tests for new functionality (adversarial input tests for parsers are especially valued)
-3. Keep dependencies minimal — this is a security tool
-4. Follow the existing code style (`cargo fmt`)
+**Quick checklist before every PR:**
 
-For security-related issues, please see [SECURITY.md](SECURITY.md) for responsible disclosure.
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+RUSTDOCFLAGS='-D warnings' cargo doc --no-deps
+```
+
+All contributors are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). For security vulnerabilities, see [SECURITY.md](SECURITY.md) — please do not file public issues for security problems.
+
+See also: [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ---
 
