@@ -61,7 +61,8 @@ impl ClientIsolation {
             .spawn()
             .and_then(|mut child| {
                 use std::io::Write;
-                if let Some(ref mut stdin) = child.stdin {
+                // Take() so stdin drops (EOF) before wait_with_output, else deadlock.
+                if let Some(mut stdin) = child.stdin.take() {
                     stdin.write_all(ruleset.as_bytes())?;
                 }
                 child.wait_with_output()
@@ -164,8 +165,8 @@ fn discover_network(interface: &str) -> Result<(Ipv4Addr, Ipv4Addr, u8), crate::
         .ok_or_else(|| crate::Error::Network("no default route found".into()))?;
 
     // Find the subnet route for this interface
-    let (subnet, prefix_len) = parse_interface_subnet(&route_content, interface)
-        .unwrap_or_else(|| {
+    let (subnet, prefix_len) =
+        parse_interface_subnet(&route_content, interface).unwrap_or_else(|| {
             // Fallback: assume /24
             let octets = route.gateway_ip.octets();
             (Ipv4Addr::new(octets[0], octets[1], octets[2], 0), 24)

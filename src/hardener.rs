@@ -142,7 +142,9 @@ table inet {TABLE_NAME} {{
             .spawn()
             .and_then(|mut child| {
                 use std::io::Write;
-                if let Some(ref mut stdin) = child.stdin {
+                // Take() rather than &mut so stdin drops (and closes) before
+                // wait_with_output() — otherwise nft blocks waiting for EOF.
+                if let Some(mut stdin) = child.stdin.take() {
                     stdin.write_all(ruleset.as_bytes())?;
                 }
                 child.wait_with_output()
