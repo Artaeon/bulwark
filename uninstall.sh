@@ -3,22 +3,22 @@
 
 set -euo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-RESET='\033[0m'
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+BOLD=$'\033[1m'
+RESET=$'\033[0m'
 
 BIN_DIR="${BIN_DIR:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/bulwark}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 DOC_DIR="${DOC_DIR:-/usr/local/share/doc/bulwark}"
 
-info()    { echo -e "${BLUE}==>${RESET} ${BOLD}$*${RESET}"; }
-success() { echo -e "${GREEN}==>${RESET} ${BOLD}$*${RESET}"; }
-warn()    { echo -e "${YELLOW}==>${RESET} ${BOLD}$*${RESET}"; }
-error()   { echo -e "${RED}==> error:${RESET} ${BOLD}$*${RESET}" >&2; exit 1; }
+info()    { printf '%s==>%s %s%s%s\n' "$BLUE" "$RESET" "$BOLD" "$*" "$RESET"; }
+success() { printf '%s==>%s %s%s%s\n' "$GREEN" "$RESET" "$BOLD" "$*" "$RESET"; }
+warn()    { printf '%s==>%s %s%s%s\n' "$YELLOW" "$RESET" "$BOLD" "$*" "$RESET"; }
+error()   { printf '%s==> error:%s %s%s%s\n' "$RED" "$RESET" "$BOLD" "$*" "$RESET" >&2; exit 1; }
 
 if [ "$(id -u)" -ne 0 ]; then
     error "this script must be run as root (try: sudo ./uninstall.sh)"

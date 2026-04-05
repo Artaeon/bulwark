@@ -4,13 +4,14 @@
 
 set -euo pipefail
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-RESET='\033[0m'
+# Colors (using $'...' so escape sequences are interpreted at assignment).
+# This means ${BOLD} etc. work correctly in both echo and heredocs.
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+BOLD=$'\033[1m'
+RESET=$'\033[0m'
 
 # Paths
 BIN_DIR="${BIN_DIR:-/usr/local/bin}"
@@ -18,10 +19,10 @@ CONFIG_DIR="${CONFIG_DIR:-/etc/bulwark}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 DOC_DIR="${DOC_DIR:-/usr/local/share/doc/bulwark}"
 
-info()    { echo -e "${BLUE}==>${RESET} ${BOLD}$*${RESET}"; }
-success() { echo -e "${GREEN}==>${RESET} ${BOLD}$*${RESET}"; }
-warn()    { echo -e "${YELLOW}==>${RESET} ${BOLD}$*${RESET}"; }
-error()   { echo -e "${RED}==> error:${RESET} ${BOLD}$*${RESET}" >&2; exit 1; }
+info()    { printf '%s==>%s %s%s%s\n' "$BLUE" "$RESET" "$BOLD" "$*" "$RESET"; }
+success() { printf '%s==>%s %s%s%s\n' "$GREEN" "$RESET" "$BOLD" "$*" "$RESET"; }
+warn()    { printf '%s==>%s %s%s%s\n' "$YELLOW" "$RESET" "$BOLD" "$*" "$RESET"; }
+error()   { printf '%s==> error:%s %s%s%s\n' "$RED" "$RESET" "$BOLD" "$*" "$RESET" >&2; exit 1; }
 
 # Pretty header
 cat <<'EOF'
@@ -33,17 +34,34 @@ cat <<'EOF'
 
 EOF
 
+# Run from script directory so relative paths work even with `sudo` from elsewhere
+cd "$(dirname "$(readlink -f "$0")")"
+
+# Figure out which mode we're running in:
+#   - release archive: pre-built ./bulwark sits next to this script
+#   - source tree: Cargo.toml present, need to build
+if [ -f ./bulwark ] && [ -x ./bulwark ]; then
+    MODE="binary"
+    BULWARK_BIN="./bulwark"
+elif [ -f Cargo.toml ] && [ -f bulwark.toml ] && [ -f bulwark.service ]; then
+    MODE="source"
+    BULWARK_BIN="target/release/bulwark"
+else
+    error "could not find source files or pre-built binary (run this from the bulwark source dir or release archive)"
+fi
+
+# Required config files (present in both modes)
+if [ ! -f bulwark.toml ] || [ ! -f bulwark.service ]; then
+    error "missing bulwark.toml or bulwark.service"
+fi
+
 # Root check
 if [ "$(id -u)" -ne 0 ]; then
     error "this installer must be run as root (try: sudo ./install.sh)"
 fi
 
-# Check dependencies
-info "checking dependencies"
-
-if ! command -v cargo >/dev/null 2>&1; then
-    error "cargo is required but not installed (install rustup: https://rustup.rs)"
-fi
+# Check runtime dependencies
+info "checking runtime dependencies"
 
 if ! command -v nft >/dev/null 2>&1; then
     warn "nftables (nft) not found — firewall hardener and some protections will be disabled"
@@ -61,14 +79,21 @@ if ! command -v notify-send >/dev/null 2>&1; then
     warn "libnotify (notify-send) not found — desktop notifications will be disabled"
 fi
 
-# Build
-info "building bulwark (release profile)"
-cargo build --release --quiet || error "cargo build failed"
-success "build complete: $(du -h target/release/bulwark | cut -f1)"
+# Build if installing from source
+if [ "$MODE" = "source" ]; then
+    if ! command -v cargo >/dev/null 2>&1; then
+        error "cargo is required to build from source (install rustup: https://rustup.rs)"
+    fi
+    info "building bulwark (release profile)"
+    cargo build --release --quiet || error "cargo build failed"
+    success "build complete: $(du -h "$BULWARK_BIN" | cut -f1)"
+else
+    info "using pre-built binary ($(du -h "$BULWARK_BIN" | cut -f1))"
+fi
 
 # Install binary
 info "installing binary to ${BIN_DIR}/bulwark"
-install -m 755 -D target/release/bulwark "${BIN_DIR}/bulwark"
+install -m 755 -D "$BULWARK_BIN" "${BIN_DIR}/bulwark"
 
 # Install config
 if [ -f "${CONFIG_DIR}/bulwark.toml" ]; then
