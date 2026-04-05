@@ -67,8 +67,6 @@ impl BssidDetector {
 
     /// Check the current BSSID and compare to baseline.
     pub fn analyze(&mut self) -> Vec<Threat> {
-        let mut threats = Vec::new();
-
         let current = match query_bssid(&self.interface) {
             Some(state) => state,
             None => {
@@ -76,9 +74,17 @@ impl BssidDetector {
                     detector = DETECTOR_NAME,
                     "not connected or iw not available"
                 );
-                return threats;
+                return Vec::new();
             }
         };
+        self.apply(current)
+    }
+
+    /// Pure decision logic: given the current BSSID/SSID state, update the
+    /// tracked baseline and return any threats. Separated from `analyze`
+    /// so it can be unit-tested without spawning `iw`.
+    pub fn apply(&mut self, current: BssidState) -> Vec<Threat> {
+        let mut threats = Vec::new();
 
         match &self.state {
             None => {
@@ -290,5 +296,123 @@ Connected to aa:bb:cc:dd:ee:ff (on wlan0)
             ssid: "AirportWiFi".into(),
         };
         assert_ne!(prev.ssid, current.ssid);
+    }
+
+    // === apply() decision logic tests (no iw subprocess required) ===
+
+    fn make_detector() -> BssidDetector {
+        BssidDetector::new(
+            BssidConfig {
+                enabled: true,
+                poll_interval_secs: 10,
+            },
+            "wlan0".to_string(),
+        )
+    }
+
+    #[test]
+    fn apply_first_call_establishes_baseline_no_threat() {
+        let mut det = make_detector();
+        let threats = det.apply(BssidState {
+            bssid: "aa:bb:cc:dd:ee:ff".into(),
+            ssid: "CafeWiFi".into(),
+        });
+        assert!(threats.is_empty());
+        assert!(det.state.is_some());
+        assert_eq!(det.state.as_ref().unwrap().bssid, "aa:bb:cc:dd:ee:ff");
+    }
+
+    #[test]
+    fn apply_same_bssid_same_ssid_no_threat() {
+        let mut det = make_detector();
+        let state = BssidState {
+            bssid: "aa:bb:cc:dd:ee:ff".into(),
+            ssid: "CafeWiFi".into(),
+        };
+        det.apply(state.clone());
+        let threats = det.apply(state);
+        assert!(threats.is_empty());
+    }
+
+    #[test]
+    fn apply_bssid_change_same_ssid_fires_high_threat() {
+        let mut det = make_detector();
+        det.apply(BssidState {
+            bssid: "aa:bb:cc:dd:ee:ff".into(),
+            ssid: "CafeWiFi".into(),
+        });
+        let threats = det.apply(BssidState {
+            bssid: "de:ad:be:ef:00:01".into(),
+            ssid: "CafeWiFi".into(),
+        });
+        assert_eq!(threats.len(), 1);
+        assert_eq!(threats[0].severity, Severity::High);
+        assert_eq!(threats[0].detector, DETECTOR_NAME);
+        match &threats[0].kind {
+            ThreatKind::BssidChanged {
+                ssid,
+                old_bssid,
+                new_bssid,
+            } => {
+                assert_eq!(ssid, "CafeWiFi");
+                assert_eq!(old_bssid, "aa:bb:cc:dd:ee:ff");
+                assert_eq!(new_bssid, "de:ad:be:ef:00:01");
+            }
+            _ => panic!("expected BssidChanged"),
+        }
+    }
+
+    #[test]
+    fn apply_ssid_change_is_not_a_threat() {
+        let mut det = make_detector();
+        det.apply(BssidState {
+            bssid: "aa:bb:cc:dd:ee:ff".into(),
+            ssid: "CafeWiFi".into(),
+        });
+        // Roamed to a different network entirely — different SSID means
+        // it's a legitimate move, not an evil twin
+        let threats = det.apply(BssidState {
+            bssid: "de:ad:be:ef:00:01".into(),
+            ssid: "AirportWiFi".into(),
+        });
+        assert!(threats.is_empty());
+        // But baseline should be updated
+        assert_eq!(det.state.as_ref().unwrap().ssid, "AirportWiFi");
+    }
+
+    #[test]
+    fn apply_both_bssid_and_ssid_change_no_threat() {
+        let mut det = make_detector();
+        det.apply(BssidState {
+            bssid: "aa:bb:cc:dd:ee:ff".into(),
+            ssid: "Net1".into(),
+        });
+        let threats = det.apply(BssidState {
+            bssid: "11:22:33:44:55:66".into(),
+            ssid: "Net2".into(),
+        });
+        assert!(
+            threats.is_empty(),
+            "both changes means legitimate roam, not evil twin"
+        );
+    }
+
+    #[test]
+    fn apply_baseline_updates_after_each_call() {
+        let mut det = make_detector();
+        det.apply(BssidState {
+            bssid: "aa:aa:aa:aa:aa:aa".into(),
+            ssid: "A".into(),
+        });
+        det.apply(BssidState {
+            bssid: "bb:bb:bb:bb:bb:bb".into(),
+            ssid: "B".into(),
+        });
+        det.apply(BssidState {
+            bssid: "cc:cc:cc:cc:cc:cc".into(),
+            ssid: "C".into(),
+        });
+        assert_eq!(det.state.as_ref().unwrap().bssid, "cc:cc:cc:cc:cc:cc");
+        assert_eq!(det.state.as_ref().unwrap().ssid, "C");
     }
 }
