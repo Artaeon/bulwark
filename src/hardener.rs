@@ -378,4 +378,83 @@ mod tests {
         assert!(h.deactivate().is_ok());
         assert!(!h.is_active());
     }
+
+    #[test]
+    fn test_generate_ruleset_deterministic() {
+        let h = make_hardener();
+        assert_eq!(h.generate_ruleset(), h.generate_ruleset());
+    }
+
+    #[test]
+    fn test_generate_ruleset_with_many_ports() {
+        let ports: Vec<u16> = (1024..1064).collect();
+        let h = Hardener::new(HardenerConfig {
+            enabled: true,
+            auto_harden: false,
+            allowed_outbound_ports: ports.clone(),
+        });
+        let ruleset = h.generate_ruleset();
+        for p in &ports {
+            assert!(ruleset.contains(&p.to_string()), "port {} missing", p);
+        }
+    }
+
+    #[test]
+    fn test_generate_ruleset_with_max_port() {
+        let h = Hardener::new(HardenerConfig {
+            enabled: true,
+            auto_harden: false,
+            allowed_outbound_ports: vec![1, 65535],
+        });
+        let ruleset = h.generate_ruleset();
+        assert!(ruleset.contains("65535"));
+        assert!(ruleset.contains("1"));
+    }
+
+    #[test]
+    fn test_generate_ruleset_contains_dns_rules() {
+        let h = make_hardener();
+        let ruleset = h.generate_ruleset();
+        assert!(ruleset.contains("udp dport 53 accept"));
+        assert!(ruleset.contains("tcp dport 53 accept"));
+    }
+
+    #[test]
+    fn test_generate_ruleset_icmp_echo_allowed() {
+        let h = make_hardener();
+        let ruleset = h.generate_ruleset();
+        assert!(ruleset.contains("icmp type echo-request"));
+        assert!(ruleset.contains("icmpv6 type echo-request"));
+    }
+
+    #[test]
+    fn test_generate_ruleset_has_both_chains() {
+        let h = make_hardener();
+        let ruleset = h.generate_ruleset();
+        let input_idx = ruleset.find("chain bulwark_input").expect("input chain");
+        let output_idx = ruleset.find("chain bulwark_output").expect("output chain");
+        // Input chain comes before output chain
+        assert!(input_idx < output_idx);
+    }
+
+    #[test]
+    fn test_on_threat_high_severity_no_auto_harden_no_activation() {
+        use crate::alert::{Severity, Threat, ThreatKind};
+        let mut h = Hardener::new(HardenerConfig {
+            enabled: true,
+            auto_harden: false,
+            allowed_outbound_ports: vec![80, 443],
+        });
+        let t = Threat::new(
+            ThreatKind::ArpFlood {
+                new_entries: 20,
+                window_secs: 5,
+            },
+            Severity::High,
+            "arp",
+        );
+        h.on_threat(&t);
+        // auto_harden disabled: should not attempt activation
+        assert!(!h.is_active());
+    }
 }
