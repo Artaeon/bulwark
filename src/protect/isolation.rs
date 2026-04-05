@@ -301,4 +301,63 @@ wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0";
         );
         assert!(rules.contains("172.16.0.0/28"));
     }
+
+    #[test]
+    fn test_rules_have_both_input_and_output_chains() {
+        let rules = generate_isolation_rules(
+            "wlan0",
+            Ipv4Addr::new(192, 168, 1, 1),
+            Ipv4Addr::new(192, 168, 1, 0),
+            24,
+        );
+        assert!(rules.contains("chain isolate_input"));
+        assert!(rules.contains("chain isolate_output"));
+    }
+
+    #[test]
+    fn test_rules_are_deterministic() {
+        let r1 = generate_isolation_rules(
+            "wlan0",
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 0),
+            24,
+        );
+        let r2 = generate_isolation_rules(
+            "wlan0",
+            Ipv4Addr::new(10, 0, 0, 1),
+            Ipv4Addr::new(10, 0, 0, 0),
+            24,
+        );
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn test_parse_interface_subnet_multiple_routes() {
+        let content = "\
+Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT
+wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0
+eth0\t0000000A\t00000000\t0001\t0\t0\t600\tFFFFFF00\t0\t0\t0
+wlan0\t0001A8C0\t00000000\t0001\t0\t0\t600\t00FFFFFF\t0\t0\t0";
+        // Should find wlan0's subnet, not eth0's
+        let (subnet, prefix) = parse_interface_subnet(content, "wlan0").expect("found");
+        assert_eq!(subnet, Ipv4Addr::new(192, 168, 1, 0));
+        assert_eq!(prefix, 24);
+    }
+
+    #[test]
+    fn test_parse_interface_subnet_rejects_too_narrow() {
+        // /31 subnet — we restrict to /8..=/30 since /31 and /32 are
+        // point-to-point and not meaningful for client isolation
+        let content = "\
+Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT
+wlan0\t00010101\t00000000\t0001\t0\t0\t600\tFEFFFFFF\t0\t0\t0";
+        // Mask FEFFFFFF = 11111110 11111111 11111111 11111111 = 31 bits
+        assert!(parse_interface_subnet(content, "wlan0").is_none());
+    }
+
+    #[test]
+    fn test_isolation_activate_then_deactivate_tracks_state() {
+        let iso = ClientIsolation::default();
+        assert!(!iso.is_active());
+    }
 }

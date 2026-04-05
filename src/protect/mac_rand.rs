@@ -214,4 +214,56 @@ mod tests {
         let mut r = MacRandomizer::new("wlan0".into());
         assert!(r.deactivate().is_ok());
     }
+
+    #[test]
+    fn test_randomized_macs_are_unique_over_many_generations() {
+        use std::collections::HashSet;
+        let macs: HashSet<String> = (0..100).map(|_| generate_random_mac()).collect();
+        // With 46 bits of randomness, 100 draws should essentially never collide
+        assert!(macs.len() >= 99, "got only {} unique MACs", macs.len());
+    }
+
+    #[test]
+    fn test_random_mac_length_and_separators() {
+        let mac = generate_random_mac();
+        assert_eq!(mac.len(), 17);
+        assert_eq!(mac.chars().filter(|c| *c == ':').count(), 5);
+    }
+
+    #[test]
+    fn test_random_mac_all_hex_digits() {
+        let mac = generate_random_mac();
+        for (i, c) in mac.chars().enumerate() {
+            if i % 3 == 2 {
+                assert_eq!(c, ':');
+            } else {
+                assert!(c.is_ascii_hexdigit(), "char {} not hex: {}", i, c);
+            }
+        }
+    }
+
+    #[test]
+    fn test_mac_randomizer_initial_interface_stored() {
+        let r = MacRandomizer::new("wlp3s0".into());
+        assert!(!r.is_active());
+        // Interface string stored for use by activate/deactivate
+        // (tested indirectly: it doesn't panic on construction)
+    }
+
+    #[test]
+    fn test_generate_random_mac_never_broadcast() {
+        for _ in 0..200 {
+            let mac = generate_random_mac();
+            assert_ne!(mac, "ff:ff:ff:ff:ff:ff", "must not generate broadcast MAC");
+        }
+    }
+
+    #[test]
+    fn test_generate_random_mac_never_all_zero() {
+        for _ in 0..200 {
+            let mac = generate_random_mac();
+            // The U/L bit is set so first byte is never 00
+            assert_ne!(&mac[..2], "00");
+        }
+    }
 }

@@ -169,4 +169,32 @@ mod tests {
         // Environment-dependent — just verify no panic
         let _ = discover_gateway();
     }
+
+    #[test]
+    fn test_default_impl() {
+        let pin = ArpPin::default();
+        assert!(!pin.is_active());
+    }
+
+    #[test]
+    fn test_new_is_equivalent_to_default() {
+        let a = ArpPin::new();
+        let b = ArpPin::default();
+        assert_eq!(a.is_active(), b.is_active());
+        assert_eq!(a.pinned.is_none(), b.pinned.is_none());
+    }
+
+    #[test]
+    fn test_multiple_deactivate_calls_are_ok() {
+        let mut pin = ArpPin::new();
+        assert!(pin.deactivate().is_ok());
+        assert!(pin.deactivate().is_ok());
+        assert!(pin.deactivate().is_ok());
+    }
+
+    #[test]
+    fn test_is_active_matches_pinned_state() {
+        let pin = ArpPin::new();
+        assert_eq!(pin.is_active(), pin.pinned.is_some());
+    }
 }

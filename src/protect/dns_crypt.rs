@@ -384,4 +384,55 @@ mod tests {
         let config = build_tls_config().unwrap();
         assert!(Arc::strong_count(&config) >= 1);
     }
+
+    #[test]
+    fn test_redirect_rules_contain_table_name() {
+        let rules = generate_dns_redirect_rules();
+        assert!(rules.contains("table ip bulwark_dns"));
+    }
+
+    #[test]
+    fn test_redirect_rules_nat_hook() {
+        let rules = generate_dns_redirect_rules();
+        assert!(rules.contains("type nat hook output"));
+    }
+
+    #[test]
+    fn test_redirect_rules_loopback_exempt() {
+        let rules = generate_dns_redirect_rules();
+        // The loopback exception must come before the redirect
+        let accept_idx = rules
+            .find("ip daddr 127.0.0.1 accept")
+            .expect("loopback accept");
+        let redirect_idx = rules.find("redirect to :5353").expect("redirect");
+        assert!(
+            accept_idx < redirect_idx,
+            "loopback exception must precede the redirect"
+        );
+    }
+
+    #[test]
+    fn test_redirect_rules_deterministic() {
+        assert_eq!(generate_dns_redirect_rules(), generate_dns_redirect_rules());
+    }
+
+    #[test]
+    fn test_dns_crypt_config_custom_resolvers() {
+        let config = DnsCryptConfig {
+            resolvers: vec!["9.9.9.9:853".to_string(), "149.112.112.112:853".to_string()],
+        };
+        let dc = DnsCrypt::new(config.clone());
+        assert!(!dc.is_active());
+        // Config stored correctly
+        assert_eq!(dc.config.resolvers.len(), 2);
+    }
+
+    #[test]
+    fn test_default_config_has_two_resolvers() {
+        let config = DnsCryptConfig::default();
+        assert_eq!(config.resolvers.len(), 2);
+        // Defaults include Cloudflare and Google
+        assert!(config.resolvers.iter().any(|r| r.contains("1.1.1.1")));
+        assert!(config.resolvers.iter().any(|r| r.contains("8.8.8.8")));
+    }
 }
