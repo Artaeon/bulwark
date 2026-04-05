@@ -9,16 +9,18 @@
 <p align="center">
   <a href="#installation">Install</a> &middot;
   <a href="#quick-start">Quick Start</a> &middot;
+  <a href="#use-cases">Use Cases</a> &middot;
   <a href="#configuration">Configure</a> &middot;
   <a href="#threat-model">Threat Model</a> &middot;
-  <a href="#architecture">Architecture</a>
+  <a href="EXAMPLES.md">Examples</a>
 </p>
 
 <p align="center">
   <img alt="Language" src="https://img.shields.io/badge/language-Rust-orange?style=flat-square"/>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue?style=flat-square"/>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Linux-lightgrey?style=flat-square"/>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-177%20passing-brightgreen?style=flat-square"/>
+  <img alt="Tests" src="https://img.shields.io/badge/tests-190%20passing-brightgreen?style=flat-square"/>
+  <img alt="CI" src="https://img.shields.io/badge/CI-GitHub%20Actions-blue?style=flat-square"/>
 </p>
 
 ---
@@ -43,6 +45,72 @@ $ sudo bulwark --foreground
 2026-04-04T14:23:06 WARN  high-severity threat detected, auto-activating firewall hardening
 2026-04-04T14:23:06 INFO  firewall hardening activated
 ```
+
+---
+
+## At a Glance
+
+**bulwark does two things:**
+
+### 1. Detect attacks (6 detectors)
+
+| Detector | Catches | Severity |
+|:---|:---|:---:|
+| ARP Spoof | Man-in-the-Middle via ARP poisoning | Critical |
+| ARP Flood | Network scanning, attack prep | High |
+| Gateway Hijack | Evil twin, rogue gateway, MITM | Critical |
+| DNS Poisoning | DNS manipulation for phishing | High |
+| Rogue DHCP | Rogue AP, DHCP-based MITM | Critical |
+| BSSID Change | Evil twin with same SSID | High |
+
+### 2. Actively prevent attacks (4 protections)
+
+| Protection | What it does |
+|:---|:---|
+| ARP Gateway Pinning | Locks the gateway's MAC at the kernel level — ARP spoofing becomes impossible |
+| Client Isolation | Blocks all LAN traffic except the gateway — other clients can't touch you |
+| DNS-over-TLS Proxy | Encrypts all DNS queries via TLS to Cloudflare/Google — DNS poisoning becomes impossible |
+| MAC Randomization | Randomizes your MAC — prevents cross-network tracking |
+
+**Plus:** Firewall auto-hardening (nftables), desktop notifications, threat deduplication, captive portal grace period, graceful rollback on shutdown.
+
+---
+
+## Use Cases
+
+### ☕ Coffee Shop / Public WiFi
+
+Enable all protections. Your machine becomes a ghost on the network — you're unspoofable, uninterceptable, and invisible to other clients.
+
+```bash
+sudo bulwark --foreground
+```
+
+### 🏨 Hotel WiFi (with captive portal)
+
+Set a 90-second grace period so portal authentication doesn't fire false positives:
+
+```toml
+startup_grace_secs = 90
+```
+
+### ✈️ Airport Lounge
+
+Prime location for evil twin attacks. Enable BSSID monitoring with aggressive polling (5s) to catch AP swaps fast.
+
+### 🎤 Security Conferences (DEF CON, Black Hat)
+
+Maximum paranoia mode. Combine bulwark with a VPN, disable all non-essential services, and run in a disposable VM if possible.
+
+### 🏠 Home Network Monitoring
+
+Detect-only mode catches misbehaving IoT devices, compromised clients, or malware on your router.
+
+### 🖥️ Server / Infrastructure
+
+Run bulwark on Linux servers to catch lateral movement attempts and rogue DHCP on your LAN. Alerts feed into journald for SIEM integration.
+
+**📖 See [EXAMPLES.md](EXAMPLES.md) for detailed configurations and real output for every scenario.**
 
 ---
 
@@ -186,32 +254,72 @@ auto_harden = true
 
 ## Installation
 
-### From source
+### One-liner (install script)
+
+```bash
+git clone https://github.com/Artaeon/bulwark.git
+cd bulwark
+sudo ./install.sh
+```
+
+The installer builds from source, installs the binary, config, systemd unit, and documentation, and verifies all dependencies. Uninstall with `sudo ./uninstall.sh`.
+
+### Using Make
+
+```bash
+git clone https://github.com/Artaeon/bulwark.git
+cd bulwark
+make release
+sudo make install
+```
+
+Available targets: `build`, `release`, `install`, `uninstall`, `test`, `fuzz`, `fmt`, `clippy`, `doc`, `check`, `run`, `clean`, `service-enable`, `service-disable`, `service-status`. Run `make help` for the full list.
+
+### From GitHub releases (binary)
+
+Download a prebuilt binary from the [releases page](https://github.com/Artaeon/bulwark/releases):
+
+```bash
+VERSION="v0.1.0"
+curl -LO "https://github.com/Artaeon/bulwark/releases/download/${VERSION}/bulwark-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+tar xzf "bulwark-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+cd "bulwark-${VERSION}-x86_64-unknown-linux-gnu"
+sudo ./install.sh
+```
+
+Every release provides `x86_64-gnu`, `x86_64-musl` (static), and `aarch64-gnu` archives, each with SHA-256 checksums.
+
+### Arch Linux (AUR)
+
+```bash
+# Using the bundled PKGBUILD
+cd packaging/arch
+makepkg -si
+```
+
+### Manual from source
 
 ```bash
 git clone https://github.com/Artaeon/bulwark.git
 cd bulwark
 cargo build --release
-
-# Install
-sudo install -m 755 target/release/bulwark /usr/local/bin/
-sudo install -d /etc/bulwark
-sudo install -m 644 bulwark.toml /etc/bulwark/
-
-# Optional: systemd service
-sudo install -m 644 bulwark.service /etc/systemd/system/
+sudo install -Dm755 target/release/bulwark /usr/local/bin/bulwark
+sudo install -Dm644 bulwark.toml /etc/bulwark/bulwark.toml
+sudo install -Dm644 bulwark.service /etc/systemd/system/bulwark.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now bulwark
 ```
 
 ### Requirements
 
-| Requirement | Notes |
-|:---|:---|
-| **Linux** | Uses `/proc/net/arp`, `/proc/net/route`, `/sys/class/net/` |
-| **Root** or capabilities | `CAP_NET_RAW` for DHCP listener, `CAP_NET_ADMIN` for nftables |
-| **nftables** | Only required if firewall hardener is enabled |
-| **Rust 1.70+** | For building from source |
+| Requirement | Purpose | Required? |
+|:---|:---|:---|
+| **Linux** | Kernel interfaces (`/proc/net/*`, `/sys/class/net/`) | Yes |
+| **Rust 1.70+** | Building from source | Only for source install |
+| **Root** or capabilities | `CAP_NET_RAW` (DHCP), `CAP_NET_ADMIN` (nftables, ARP, MAC) | Yes for most features |
+| **nftables** (`nft`) | Firewall hardener, client isolation, DNS redirect | For active protections |
+| **iproute2** (`ip`) | ARP pinning, MAC randomization | For those protections |
+| **iw** | BSSID/evil-twin detection | For BSSID detector |
+| **libnotify** (`notify-send`) | Desktop notifications | Optional, best-effort |
 
 ---
 
@@ -388,9 +496,9 @@ src/
 ```
 $ cargo test
 
-running 177 tests
+running 190 tests
 ...
-test result: ok. 155 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 190 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 ### Test coverage by module
@@ -427,6 +535,56 @@ See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy.
 - **Input validation** — Config validated at load. Parsers reject malformed data gracefully (return `None`/`Err`, never panic).
 - **Minimal unsafe** — Only two `unsafe` blocks, both documented with `SAFETY` comments: `geteuid()` (trivial syscall) and `setsockopt()` (socket binding with validated buffer).
 - **Threat deduplication** — Bounded memory (max 1024 tracked keys with auto-eviction) prevents memory exhaustion from sustained attacks.
+
+---
+
+## FAQ
+
+**Q: Will bulwark break my normal network usage?**
+A: No. In default (detect-only) mode it makes zero changes to your system — it only reads `/proc` files. Active protections are all opt-in and cleanly reversible.
+
+**Q: Does it work on home WiFi (WPA2/WPA3)?**
+A: Yes. It's designed for open networks but works anywhere. On a trusted home network you probably want detect-only mode to catch compromised devices or misbehaving IoT.
+
+**Q: Does it replace a VPN?**
+A: No — it complements one. A VPN encrypts all your traffic end-to-end; bulwark protects your local network stack against LAN-layer attacks. Use both for maximum security on hostile networks.
+
+**Q: What about captive portals (hotels, airports)?**
+A: Set `startup_grace_secs = 90` to suppress alerts during portal authentication. After the grace period, alerts resume normally.
+
+**Q: Can I use it without root?**
+A: You can run `--check-config` and `--print-rules` as any user. Full operation needs root or `CAP_NET_RAW` + `CAP_NET_ADMIN` for raw sockets and nftables.
+
+**Q: Does MAC randomization break my network connection?**
+A: Yes, briefly — the interface is brought down and up to apply the new MAC. Most systems will auto-reconnect within a few seconds. If you need zero interruption, disable this one protection.
+
+**Q: How much does it cost in resources?**
+A: Minimal. The release binary is ~4 MB with LTO+strip, idle CPU use is effectively zero, and memory usage is under 20 MB. All detectors poll with configurable intervals — the default settings won't noticeably impact your battery.
+
+**Q: Does it work on NixOS / Debian / Ubuntu / Fedora?**
+A: Yes. The install script is distro-agnostic. An AUR PKGBUILD is provided for Arch; other package formats are welcome contributions.
+
+**Q: How do I know it's actually detecting things?**
+A: Run `sudo bulwark --foreground --log-level debug` and in another terminal run `arping` or `arp` commands — you'll see the detector track changes in real-time. See [EXAMPLES.md](EXAMPLES.md) for more test scenarios.
+
+**Q: Can I integrate alerts with my SIEM / Slack / email?**
+A: Today, alerts go to stderr (and journald when run as a service). You can pipe journald output to anything — Promtail, Vector, Fluent Bit, or a simple `grep | mail` script. Native webhook/SIEM support is a planned feature.
+
+**Q: What's the deal with the 190 tests?**
+A: Every parser has adversarial input tests (malformed packets, binary garbage, overflow attempts). Every detector has edge-case tests (empty tables, disappearing routes, simultaneous changes). Every protection has lifecycle tests. See the test coverage table above.
+
+---
+
+## Contributing
+
+Contributions welcome! Please:
+
+1. Run `cargo test` and `cargo clippy -- -D warnings` before submitting
+2. Add tests for new functionality (adversarial input tests for parsers are especially valued)
+3. Keep dependencies minimal — this is a security tool
+4. Follow the existing code style (`cargo fmt`)
+
+For security-related issues, please see [SECURITY.md](SECURITY.md) for responsible disclosure.
 
 ---
 
