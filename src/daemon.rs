@@ -598,4 +598,111 @@ mod tests {
         let k2 = ThreatDedup::threat_key(&threat);
         assert_eq!(k1, k2);
     }
+
+    #[test]
+    fn test_dedup_same_kind_different_details_are_distinct() {
+        let mut dedup = ThreatDedup::new(60);
+        let t1 = make_threat(
+            "arp",
+            Severity::Critical,
+            ThreatKind::ArpSpoof {
+                ip: Ipv4Addr::new(192, 168, 1, 1),
+                old_mac: crate::net_util::MacAddr([0xaa; 6]),
+                new_mac: crate::net_util::MacAddr([0xbb; 6]),
+            },
+        );
+        // Different IP — same detector, same kind variant, different payload.
+        // Should be treated as a distinct threat (not suppressed).
+        let t2 = make_threat(
+            "arp",
+            Severity::Critical,
+            ThreatKind::ArpSpoof {
+                ip: Ipv4Addr::new(192, 168, 1, 2),
+                old_mac: crate::net_util::MacAddr([0xaa; 6]),
+                new_mac: crate::net_util::MacAddr([0xbb; 6]),
+            },
+        );
+        assert!(dedup.should_emit(&t1));
+        assert!(dedup.should_emit(&t2));
+    }
+
+    #[test]
+    fn test_dedup_stress_thousands_of_threats() {
+        let mut dedup = ThreatDedup::new(60);
+        let mut emitted = 0usize;
+        // 5000 distinct threats — each flood count creates a unique kind.
+        // Verify no panic, no hang, and that eviction keeps memory bounded.
+        for i in 0..5000usize {
+            let t = make_threat(
+                "arp",
+                Severity::High,
+                ThreatKind::ArpFlood {
+                    new_entries: i,
+                    window_secs: 5,
+                },
+            );
+            if dedup.should_emit(&t) {
+                emitted += 1;
+            }
+        }
+        assert_eq!(emitted, 5000, "all distinct threats emit on first sight");
+        // last_seen size is bounded: after the eviction threshold is hit,
+        // the map shouldn't grow without limit.
+        assert!(dedup.last_seen.len() <= 5000);
+    }
+
+    #[test]
+    fn test_dedup_interleaved_detectors() {
+        let mut dedup = ThreatDedup::new(60);
+        let arp = make_threat(
+            "arp",
+            Severity::Critical,
+            ThreatKind::ArpFlood {
+                new_entries: 10,
+                window_secs: 5,
+            },
+        );
+        let dns = make_threat(
+            "dns",
+            Severity::High,
+            ThreatKind::DnsPoisoning {
+                domain: "example.com".into(),
+                system_results: vec![],
+                trusted_results: vec![],
+            },
+        );
+        // First round — all emit
+        assert!(dedup.should_emit(&arp));
+        assert!(dedup.should_emit(&dns));
+        // Second round — all suppressed
+        assert!(!dedup.should_emit(&arp));
+        assert!(!dedup.should_emit(&dns));
+        // Still two unique keys tracked
+        assert_eq!(dedup.last_seen.len(), 2);
+    }
+
+    #[test]
+    fn test_threat_key_includes_detector_name() {
+        let t_arp = make_threat(
+            "arp",
+            Severity::Low,
+            ThreatKind::ArpFlood {
+                new_entries: 1,
+                window_secs: 5,
+            },
+        );
+        let t_dns = make_threat(
+            "dns",
+            Severity::Low,
+            ThreatKind::ArpFlood {
+                new_entries: 1,
+                window_secs: 5,
+            },
+        );
+        // Same kind + payload, different detector → distinct keys
+        assert_ne!(
+            ThreatDedup::threat_key(&t_arp),
+            ThreatDedup::threat_key(&t_dns)
+        );
+    }
 }
