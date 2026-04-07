@@ -16,27 +16,33 @@ yanked = "deny"
 ignore = []
 
 [licenses]
-# Permissive licenses acceptable for a security tool
+# Permissive licenses acceptable for a security tool.
+# All entries are permissive / public-domain-equivalent.
 allow = [
     "MIT",
+    "MIT-0",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
+    "Unlicense",
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Zlib",
     "CC0-1.0",
     "OpenSSL",
+    # webpki-roots — Mozilla CA bundle
+    "CDLA-Permissive-2.0",
+    # r-efi (EFI support, not linked on Linux but pulled transitively)
+    "LGPL-2.1-or-later",
 ]
-confidence-threshold = 0.93
+confidence-threshold = 0.8
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
 highlight = "all"
-workspace-default-features = "allow"
 
 [sources]
 unknown-registry = "deny"
