@@ -133,10 +133,13 @@ jobs:
 
           ### Supported platforms
 
-          - `x86_64-unknown-linux-gnu` — Linux x86_64 (glibc)
-          - `x86_64-unknown-linux-musl` — Linux x86_64 (static musl)
-          - `aarch64-unknown-linux-gnu` — Linux ARM64
+          | Archive | Description |
+          |:---|:---|
+          | `x86_64-unknown-linux-gnu` | Linux x86_64 (glibc) |
+          | `x86_64-unknown-linux-musl` | Linux x86_64 (static musl) |
+          | `aarch64-unknown-linux-gnu` | Linux ARM64 |
 
+          See [CHANGELOG](https://github.com/Artaeon/bulwark/blob/master/CHANGELOG.md) for what's new.
           See [README](https://github.com/Artaeon/bulwark/blob/master/README.md) for full documentation.
           EOF
 
